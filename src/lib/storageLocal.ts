@@ -54,7 +54,7 @@ export interface StoredUser {
 
 export interface QrCodeRecord {
   id: string;
-  entityType: 'short_link' | 'bio_page';
+  entityType: 'short_link' | 'bio_page' | 'custom';
   entityId?: string;
   targetUrl: string;
   title?: string;
@@ -71,6 +71,8 @@ export const defaultBio: BioPageConfig = {
   avatarUrl: '',
   whatsapp: '',
   email: '',
+  country: '',
+  category: '',
   socialLinks: [],
   links: [],
   theme: 'Modern',

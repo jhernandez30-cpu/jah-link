@@ -4,6 +4,7 @@ import { Mail, Lock, User, ArrowRight, Loader2 } from 'lucide-react';
 import BrandLogo from '../components/BrandLogo';
 import { useApp } from '../context/AppContext';
 import { getPlanLabel, normalizePlan } from '../lib/plans';
+import { DEMO_MODE_MESSAGE } from '../lib/storage';
 
 export default function RegisterPage() {
   const navigate = useNavigate();
@@ -56,7 +57,7 @@ export default function RegisterPage() {
             <p className="text-[var(--text-secondary)] text-xs font-semibold uppercase tracking-widest">Crear cuenta</p>
             {!isSupabaseMode && (
               <p className="text-[10px] text-amber-400/90 text-center">
-                Modo demo activo: los datos se guardan temporalmente en este navegador.
+                {DEMO_MODE_MESSAGE}
               </p>
             )}
             {requestedPlan !== 'gratis' && (

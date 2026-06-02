@@ -124,6 +124,8 @@ export default function SettingsView() {
       username: cleanUsername || bioConfig.username || 'miperfil',
       whatsapp: whatsapp.trim(),
       email: email.trim(),
+      country: country.trim(),
+      category: category.trim(),
       avatarUrl: avatarUrl || '',
       primaryColor: planInfo.limits.advancedCustomization ? primaryColor : bioConfig.primaryColor,
     });

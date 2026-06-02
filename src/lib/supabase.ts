@@ -1,10 +1,27 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
+export const DEMO_MODE_MESSAGE =
+  'Modo demo activo: los datos se guardan temporalmente en este navegador. En producción se conectará Supabase desde Vercel.';
+
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
+function isConfiguredValue(value: string | undefined, placeholder: string): value is string {
+  return Boolean(value && value.trim() && value.trim() !== placeholder);
+}
+
+function isValidSupabaseUrl(value: string | undefined): value is string {
+  if (!isConfiguredValue(value, 'your_supabase_project_url')) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
 export function isSupabaseConfigured(): boolean {
-  return Boolean(url && anonKey && url.length > 0 && anonKey.length > 0);
+  return isValidSupabaseUrl(url) && isConfiguredValue(anonKey, 'your_supabase_anon_key');
 }
 
 let client: SupabaseClient | null = null;
@@ -23,6 +40,37 @@ export function getSupabase(): SupabaseClient | null {
   return client;
 }
 
+export async function getSupabaseDevDiagnostics() {
+  const enabled = import.meta.env.DEV === true;
+  const sb = getSupabase();
+  if (!enabled) {
+    return { enabled, configured: isSupabaseConfigured(), table: 'profiles', ok: null, count: null, error: null };
+  }
+  if (!sb) {
+    return {
+      enabled,
+      configured: false,
+      table: 'profiles',
+      ok: false,
+      count: null,
+      error: DEMO_MODE_MESSAGE,
+    };
+  }
+
+  const { count, error } = await sb
+    .from('profiles')
+    .select('id', { count: 'exact', head: true });
+
+  return {
+    enabled,
+    configured: true,
+    table: 'profiles',
+    ok: !error,
+    count: count ?? null,
+    error: error?.message ?? null,
+  };
+}
+
 export type Database = {
   public: {
     Tables: {
@@ -36,6 +84,7 @@ export type Database = {
           plan: string;
           requested_plan: string | null;
           role: string;
+          membership: string;
           status: string;
           whatsapp: string | null;
           country: string | null;
@@ -67,6 +116,8 @@ export type Database = {
           avatar_url: string | null;
           whatsapp: string | null;
           email: string | null;
+          category: string | null;
+          country: string | null;
           theme: string;
           primary_color: string;
           button_style: string;
@@ -99,7 +150,7 @@ export type Database = {
         Row: {
           id: string;
           user_id: string;
-          entity_type: string;
+          entity_type: 'short_link' | 'bio_page' | 'custom';
           entity_id: string | null;
           target_url: string;
           title: string | null;
@@ -112,14 +163,37 @@ export type Database = {
         Row: {
           id: string;
           user_id: string | null;
-          entity_type: string;
+          entity_type: 'short_link' | 'bio_page' | 'bio_link' | 'qr_code';
           entity_id: string | null;
-          event_type: string;
+          event_type: 'view' | 'click' | 'scan';
           referrer: string | null;
           user_agent: string | null;
           metadata: Record<string, unknown>;
           created_at: string;
         };
+      };
+    };
+    Functions: {
+      resolve_short_link_redirect: {
+        Args: { p_slug: string };
+        Returns: Array<{
+          link_id: string;
+          destination_url: string;
+          is_active: boolean;
+          user_id: string;
+        }>;
+      };
+      track_bio_page_view: {
+        Args: { p_username: string };
+        Returns: undefined;
+      };
+      track_bio_link_click: {
+        Args: { p_link_id: string };
+        Returns: undefined;
+      };
+      track_qr_code_scan: {
+        Args: { p_qr_id: string };
+        Returns: undefined;
       };
     };
   };

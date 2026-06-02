@@ -107,6 +107,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     username: '',
     bio: '',
     avatarUrl: '',
+    country: '',
+    category: '',
     socialLinks: [],
     links: [],
     theme: 'Modern',
@@ -132,7 +134,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshData = useCallback(async () => {
-    if (!isAuthenticated) return;
     setLoading(true);
     try {
       const [linksData, bioData, events, qr] = await Promise.all([
@@ -154,7 +155,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated, supabaseMode, user?.plan]);
+  }, [supabaseMode, user?.plan]);
 
   const loadProfile = useCallback(async () => {
     try {

@@ -10,6 +10,15 @@ Plataforma SaaS para **enlaces cortos**, **páginas bio**, **códigos QR** y **a
 - Supabase (`@supabase/supabase-js`)
 - Recharts · qrcode.react
 
+Este proyecto usa **Vite + React**, no Next.js. Por eso las variables publicas correctas son:
+
+```env
+VITE_SUPABASE_URL=your_supabase_project_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+No uses `NEXT_PUBLIC_SUPABASE_URL` ni `NEXT_PUBLIC_SUPABASE_ANON_KEY` en esta app.
+
 ## Instalación
 
 1. **Instalar dependencias**:
@@ -67,6 +76,58 @@ Vite es un bundler que necesita su propio servidor de desarrollo para procesar l
 3. En **Authentication → Providers**, habilita Email.
 4. (Opcional) **Storage** → crea un bucket público llamado `avatars` para fotos de perfil/bio.
 5. Copia la **Project URL** y **anon public key** a tu archivo de configuración de entorno.
+
+### Vercel + Supabase
+
+La guía de Vercel muestra una tabla notes como ejemplo, pero JAH Link usa tablas reales: profiles, short_links, bio_pages, bio_links, qr_codes y analytics_events.
+
+Pasos para producción:
+
+1. En Vercel, conecta Supabase desde **Storage/Database**.
+2. Usa **Open in Supabase** para entrar al proyecto conectado.
+3. En Supabase, abre **SQL Editor** y ejecuta `supabase/schema.sql` completo.
+4. En Vercel, configura:
+   ```env
+   VITE_SUPABASE_URL=your_supabase_project_url
+   VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+   ```
+   Ruta: **Project Settings → Environment Variables**.
+5. Haz **Redeploy** del proyecto en Vercel.
+
+No crees ni uses la tabla `notes` para producción. Esa tabla pertenece al ejemplo genérico y no representa el modelo de datos de JAH Link.
+
+Opcional con Vercel CLI:
+
+```bash
+vercel link
+vercel env pull .env.local
+```
+
+En Vite puedes usar `.env.local` para desarrollo local. No subas `.env` ni `.env.local` al repositorio.
+
+## Pendientes de producción
+
+1. Abrir el proyecto de Supabase conectado a JAH Link.
+2. Ir a **SQL Editor**.
+3. Ejecutar el archivo completo `supabase/schema.sql`.
+4. Ir a Vercel → **Project Settings** → **Environment Variables**.
+5. Agregar estas variables:
+   ```env
+   VITE_SUPABASE_URL=your_supabase_project_url
+   VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+   ```
+6. Confirmar configuración de Vercel:
+   - Build command: `npm run build`
+   - Output directory: `dist`
+7. Hacer **Redeploy** en Vercel.
+8. Verificar en producción:
+   - Registro
+   - Login
+   - Perfil de usuario
+   - Enlaces cortos y redirección por slug
+   - Página bio pública
+   - Códigos QR
+   - Analítica de clics, visitas y escaneos
 
 ## Planes y comportamiento
 

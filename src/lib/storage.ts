@@ -4,7 +4,7 @@
  */
 
 import type { BioLink, BioPageConfig, ShortLink } from '../types';
-import { getSupabase, isSupabaseConfigured } from './supabase';
+import { DEMO_MODE_MESSAGE, getSupabase, isSupabaseConfigured } from './supabase';
 import {
   configToBioPagePayload,
   planFromDb,
@@ -28,7 +28,7 @@ import {
 } from './storageLocal';
 
 export type { AnalyticsEvent, QrCodeRecord, StoredUser };
-export { isSupabaseConfigured };
+export { DEMO_MODE_MESSAGE, isSupabaseConfigured };
 
 export class StorageError extends Error {
   code: string;
@@ -53,6 +53,47 @@ export interface RedirectResult {
 }
 
 export type BioPageWithId = BioPageConfig & { bioPageId?: string };
+type DbEventType = 'view' | 'click' | 'scan';
+type DbEntityType = 'short_link' | 'bio_page' | 'bio_link' | 'qr_code';
+type QrEntityType = 'short_link' | 'bio_page' | 'custom';
+
+function mapDbEventType(eventType: string): DbEventType {
+  if (eventType === 'view' || eventType === 'bio_view') return 'view';
+  if (eventType === 'scan') return 'scan';
+  return 'click';
+}
+
+function mapLocalEventType(eventType: string, entityType?: string): AnalyticsEvent['type'] {
+  if (eventType === 'bio_view' || (eventType === 'view' && entityType === 'bio_page')) return 'bio_view';
+  if (eventType === 'bio_button_click' || entityType === 'bio_link') return 'bio_button_click';
+  return 'link_click';
+}
+
+function mapDbEntityType(entityType: string): DbEntityType {
+  if (entityType === 'bio_page' || entityType === 'bio_link' || entityType === 'qr_code') return entityType;
+  return 'short_link';
+}
+
+function mapQrEntityType(entityType: string): QrEntityType {
+  if (entityType === 'bio_page' || entityType === 'custom') return entityType;
+  return 'short_link';
+}
+
+function bioLinkFromRow(row: {
+  id: string;
+  title: string;
+  url: string;
+  icon: string | null;
+  is_active: boolean;
+}): BioLink {
+  return {
+    id: row.id,
+    label: row.title,
+    url: row.url,
+    platform: row.icon ?? 'Website',
+    active: row.is_active,
+  };
+}
 
 // ——— Auth ———
 
@@ -178,15 +219,56 @@ export async function getCurrentProfile(): Promise<StoredUser | null> {
     .single();
 
   if (error || !data) {
+    const fullName = user.user_metadata?.full_name ?? user.email?.split('@')[0] ?? 'Usuario';
+    const username = String(user.user_metadata?.username ?? user.email?.split('@')[0] ?? '')
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '');
+    const requestedPlan = user.user_metadata?.requested_plan
+      ? normalizePlan(user.user_metadata.requested_plan)
+      : null;
+    const { data: inserted } = await sb
+      .from('profiles')
+      .upsert({
+        id: user.id,
+        email: user.email ?? '',
+        full_name: fullName,
+        username: username || `user_${user.id.replaceAll('-', '').slice(0, 8)}`,
+        avatar_url: null,
+        plan: 'gratis',
+        requested_plan: requestedPlan,
+        role: 'user',
+        membership: 'Miembro Gratis',
+        status: 'active',
+      }, { onConflict: 'id' })
+      .select()
+      .maybeSingle();
+
+    if (inserted) {
+      return {
+        id: inserted.id,
+        email: inserted.email ?? user.email ?? '',
+        name: inserted.full_name ?? fullName,
+        username: inserted.username ?? undefined,
+        avatarUrl: inserted.avatar_url ?? null,
+        plan: planFromDb(inserted.plan),
+        requestedPlan: inserted.requested_plan ? normalizePlan(inserted.requested_plan) : null,
+        role: 'user',
+        membership: inserted.membership ?? getMembershipLabel(inserted.plan),
+        status: 'active',
+        whatsapp: inserted.whatsapp ?? '',
+        country: inserted.country ?? '',
+        category: inserted.category ?? '',
+      };
+    }
+
     return {
       id: user.id,
       email: user.email ?? '',
-      name: user.user_metadata?.full_name ?? user.email?.split('@')[0] ?? 'Usuario',
+      name: fullName,
+      username: username || undefined,
       avatarUrl: null,
       plan: 'gratis',
-      requestedPlan: user.user_metadata?.requested_plan
-        ? normalizePlan(user.user_metadata.requested_plan)
-        : null,
+      requestedPlan,
       role: 'user',
       membership: 'Miembro Gratis',
       status: 'active',
@@ -202,7 +284,7 @@ export async function getCurrentProfile(): Promise<StoredUser | null> {
     plan: planFromDb(data.plan),
     requestedPlan: data.requested_plan ? normalizePlan(data.requested_plan) : null,
     role: 'user',
-    membership: getMembershipLabel(data.plan),
+    membership: data.membership ?? getMembershipLabel(data.plan),
     status: data.status === 'active' ? 'active' : 'active',
     whatsapp: data.whatsapp ?? '',
     country: data.country ?? '',
@@ -268,7 +350,7 @@ export async function updateProfile(patch: Partial<StoredUser>): Promise<StoredU
     plan: planFromDb(data.plan),
     requestedPlan: data.requested_plan ? normalizePlan(data.requested_plan) : null,
     role: 'user',
-    membership: getMembershipLabel(data.plan),
+    membership: data.membership ?? getMembershipLabel(data.plan),
     status: data.status === 'active' ? 'active' : 'active',
     whatsapp: data.whatsapp ?? '',
     country: data.country ?? '',
@@ -435,6 +517,42 @@ export async function getShortLinkBySlug(slug: string): Promise<ShortLink | null
   return rowToShortLink(data);
 }
 
+export async function incrementShortLinkClick(linkId: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    const links = localStore.loadLinks();
+    const next = links.map((link) =>
+      link.id === linkId ? { ...link, clicks: link.clicks + 1 } : link,
+    );
+    localStore.saveLinks(next);
+    const clicked = next.find((link) => link.id === linkId);
+    localStore.pushAnalytics({ type: 'link_click', label: clicked?.slug ?? clicked?.shortUrl ?? linkId });
+    return;
+  }
+
+  const sb = getSupabase()!;
+  const { data: link, error } = await sb
+    .from('short_links')
+    .select('id,user_id,slug,clicks_count')
+    .eq('id', linkId)
+    .maybeSingle();
+
+  if (error || !link) return;
+
+  await sb
+    .from('short_links')
+    .update({ clicks_count: (link.clicks_count ?? 0) + 1 })
+    .eq('id', linkId);
+
+  await sb.from('analytics_events').insert({
+    user_id: link.user_id,
+    entity_type: 'short_link',
+    entity_id: link.id,
+    event_type: 'click',
+    metadata: { slug: link.slug },
+    user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
+  });
+}
+
 export async function resolveSlugRedirect(slug: string): Promise<RedirectResult | null> {
   if (!isSupabaseConfigured()) {
     const link = await getShortLinkBySlug(slug);
@@ -573,6 +691,142 @@ export async function upsertBioPage(config: BioPageConfig): Promise<BioPageWithI
   return getBioPage();
 }
 
+async function getOwnBioPageId(): Promise<string | undefined> {
+  const userId = await requireUserId();
+  const sb = getSupabase()!;
+  const { data } = await sb
+    .from('bio_pages')
+    .select('id')
+    .eq('user_id', userId)
+    .maybeSingle();
+  return data?.id;
+}
+
+export async function getBioLinks(bioPageId?: string): Promise<BioLink[]> {
+  if (!isSupabaseConfigured()) return localStore.loadBio().links;
+
+  const pageId = bioPageId ?? await getOwnBioPageId();
+  if (!pageId) return [];
+
+  const sb = getSupabase()!;
+  const { data, error } = await sb
+    .from('bio_links')
+    .select('*')
+    .eq('bio_page_id', pageId)
+    .order('position');
+
+  if (error) throw new StorageError('load', 'No se pudieron cargar los botones de la bio.');
+  return (data ?? []).map(bioLinkFromRow);
+}
+
+export async function createBioLink(input: {
+  bioPageId?: string;
+  label: string;
+  url: string;
+  platform?: string;
+  active?: boolean;
+}): Promise<BioLink> {
+  if (!isSupabaseConfigured()) {
+    const bio = localStore.loadBio();
+    const item: BioLink = {
+      id: crypto.randomUUID(),
+      label: input.label,
+      url: input.url,
+      platform: input.platform ?? 'Website',
+      active: input.active !== false,
+    };
+    localStore.saveBio({ ...bio, links: [...bio.links, item] });
+    return item;
+  }
+
+  const pageId = input.bioPageId ?? await getOwnBioPageId();
+  if (!pageId) throw new StorageError('save', 'Primero debes crear la página bio.');
+
+  const sb = getSupabase()!;
+  const { count } = await sb
+    .from('bio_links')
+    .select('id', { count: 'exact', head: true })
+    .eq('bio_page_id', pageId);
+
+  const { data, error } = await sb
+    .from('bio_links')
+    .insert({
+      bio_page_id: pageId,
+      title: input.label,
+      url: input.url,
+      icon: input.platform ?? 'Website',
+      position: count ?? 0,
+      is_active: input.active !== false,
+    })
+    .select()
+    .single();
+
+  if (error) throw new StorageError('save', 'No se pudo crear el botón de la bio.');
+  return bioLinkFromRow(data);
+}
+
+export async function updateBioLink(id: string, patch: Partial<BioLink>): Promise<BioLink> {
+  if (!isSupabaseConfigured()) {
+    const bio = localStore.loadBio();
+    const links = bio.links.map((link) => link.id === id ? { ...link, ...patch } : link);
+    localStore.saveBio({ ...bio, links });
+    const updated = links.find((link) => link.id === id);
+    if (!updated) throw new StorageError('save', 'No se encontró el botón de la bio.');
+    return updated;
+  }
+
+  const sb = getSupabase()!;
+  const payload: Record<string, unknown> = {};
+  if (patch.label !== undefined) payload.title = patch.label;
+  if (patch.url !== undefined) payload.url = patch.url;
+  if (patch.platform !== undefined) payload.icon = patch.platform;
+  if (patch.active !== undefined) payload.is_active = patch.active;
+
+  const { data, error } = await sb
+    .from('bio_links')
+    .update(payload)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) throw new StorageError('save', 'No se pudo actualizar el botón de la bio.');
+  return bioLinkFromRow(data);
+}
+
+export async function deleteBioLink(id: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    const bio = localStore.loadBio();
+    localStore.saveBio({ ...bio, links: bio.links.filter((link) => link.id !== id) });
+    return;
+  }
+
+  const sb = getSupabase()!;
+  const { error } = await sb.from('bio_links').delete().eq('id', id);
+  if (error) throw new StorageError('delete', 'No se pudo eliminar el botón de la bio.');
+}
+
+export async function reorderBioLinks(orderedIds: string[]): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    const bio = localStore.loadBio();
+    const byId = new Map(bio.links.map((link) => [link.id, link]));
+    const ordered = orderedIds
+      .map((id) => byId.get(id))
+      .filter((link): link is BioLink => Boolean(link));
+    const rest = bio.links.filter((link) => !orderedIds.includes(link.id));
+    localStore.saveBio({ ...bio, links: [...ordered, ...rest] });
+    return;
+  }
+
+  const sb = getSupabase()!;
+  const updates = orderedIds.map((id, position) =>
+    sb.from('bio_links').update({ position }).eq('id', id),
+  );
+  const results = await Promise.all(updates);
+  if (results.some((result) => result.error)) {
+    throw new StorageError('save', 'No se pudo reordenar la bio.');
+  }
+}
+
 export async function incrementBioPageView(username: string): Promise<void> {
   if (!isSupabaseConfigured()) {
     localStore.pushAnalytics({ type: 'bio_view', label: username });
@@ -607,7 +861,7 @@ export async function getQrCodes(): Promise<QrCodeRecord[]> {
   if (error) throw new StorageError('load', 'No se pudo cargar la información.');
   return (data ?? []).map((r) => ({
     id: r.id,
-    entityType: r.entity_type as 'short_link' | 'bio_page',
+    entityType: r.entity_type,
     entityId: r.entity_id ?? undefined,
     targetUrl: r.target_url,
     title: r.title ?? undefined,
@@ -625,7 +879,7 @@ export async function createQrCode(input: {
   if (!isSupabaseConfigured()) {
     const item: QrCodeRecord = {
       id: crypto.randomUUID(),
-      entityType: input.entityType as 'short_link' | 'bio_page',
+      entityType: mapQrEntityType(input.entityType),
       entityId: input.entityId,
       targetUrl: input.targetUrl,
       title: input.title,
@@ -643,7 +897,7 @@ export async function createQrCode(input: {
     .from('qr_codes')
     .insert({
       user_id: userId,
-      entity_type: input.entityType,
+      entity_type: mapQrEntityType(input.entityType),
       entity_id: input.entityId ?? null,
       target_url: input.targetUrl,
       title: input.title ?? null,
@@ -655,7 +909,7 @@ export async function createQrCode(input: {
 
   return {
     id: data.id,
-    entityType: data.entity_type as 'short_link' | 'bio_page',
+    entityType: data.entity_type,
     entityId: data.entity_id ?? undefined,
     targetUrl: data.target_url,
     title: data.title ?? undefined,
@@ -675,6 +929,20 @@ export async function deleteQrCode(id: string): Promise<void> {
   if (error) throw new StorageError('delete', 'No se pudo eliminar el código QR.');
 }
 
+export async function incrementQrCodeScan(id: string): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    const updated = localStore.loadQrCodes().map((qr) =>
+      qr.id === id ? { ...qr, scansCount: qr.scansCount + 1 } : qr,
+    );
+    localStore.saveQrCodes(updated);
+    localStore.pushAnalytics({ type: 'link_click', label: `qr:${id}` });
+    return;
+  }
+
+  const sb = getSupabase()!;
+  await sb.rpc('track_qr_code_scan', { p_qr_id: id });
+}
+
 // ——— Analítica ———
 
 export async function trackAnalyticsEvent(event: {
@@ -683,9 +951,11 @@ export async function trackAnalyticsEvent(event: {
   eventType: string;
   metadata?: Record<string, unknown>;
 }): Promise<void> {
+  const dbEventType = mapDbEventType(event.eventType);
+  const dbEntityType = mapDbEntityType(event.entityType);
   if (!isSupabaseConfigured()) {
     localStore.pushAnalytics({
-      type: event.eventType as AnalyticsEvent['type'],
+      type: mapLocalEventType(dbEventType, dbEntityType),
       label: event.entityId ?? event.entityType,
     });
     return;
@@ -701,9 +971,9 @@ export async function trackAnalyticsEvent(event: {
 
   await sb.from('analytics_events').insert({
     user_id: userId,
-    entity_type: event.entityType,
+    entity_type: dbEntityType,
     entity_id: event.entityId ?? null,
-    event_type: event.eventType,
+    event_type: dbEventType,
     metadata: event.metadata ?? {},
     user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
   });
@@ -725,7 +995,7 @@ export async function getAnalyticsEvents(limit = 100): Promise<AnalyticsEvent[]>
 
   return (data ?? []).map((e) => ({
     id: e.id,
-    type: mapEventType(e.event_type),
+    type: mapLocalEventType(e.event_type, e.entity_type),
     label: (e.metadata as { slug?: string; username?: string })?.slug
       ?? (e.metadata as { username?: string })?.username
       ?? e.entity_type,
@@ -733,12 +1003,6 @@ export async function getAnalyticsEvents(limit = 100): Promise<AnalyticsEvent[]>
     entityType: e.entity_type,
     entityId: e.entity_id ?? undefined,
   }));
-}
-
-function mapEventType(t: string): AnalyticsEvent['type'] {
-  if (t === 'bio_view') return 'bio_view';
-  if (t === 'bio_button_click') return 'bio_button_click';
-  return 'link_click';
 }
 
 export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {

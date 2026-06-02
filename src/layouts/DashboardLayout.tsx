@@ -20,6 +20,7 @@ import BrandLogo from '../components/BrandLogo';
 import InitialsAvatar from '../components/InitialsAvatar';
 import { useApp } from '../context/AppContext';
 import { getMembershipLabel, getPlanLabel } from '../lib/plans';
+import { DEMO_MODE_MESSAGE } from '../lib/storage';
 
 const navItems = [
   { to: '/dashboard', label: 'Panel principal', icon: LayoutDashboard, end: true },
@@ -182,7 +183,7 @@ export default function DashboardLayout() {
         <div className="flex-1 p-6 md:p-8 overflow-y-auto max-w-7xl w-full mx-auto space-y-4">
           {!isSupabaseMode && (
             <p className="text-xs text-amber-400/90 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2">
-              Modo demo activo: los datos se guardan temporalmente en este navegador. En producción se conectará Supabase desde Vercel.
+              {DEMO_MODE_MESSAGE}
             </p>
           )}
           {error && (

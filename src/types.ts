@@ -48,6 +48,8 @@ export interface BioPageConfig {
   avatarUrl: string;
   whatsapp?: string;
   email?: string;
+  country?: string;
+  category?: string;
   socialLinks: SocialLink[];
   links: BioLink[];
   theme: 'Modern' | 'Classic';

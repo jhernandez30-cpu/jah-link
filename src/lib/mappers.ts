@@ -71,6 +71,8 @@ export function rowsToBioPageConfig(
     avatarUrl: page.avatar_url ?? '',
     whatsapp: page.whatsapp ?? '',
     email: page.email ?? '',
+    category: page.category ?? '',
+    country: page.country ?? '',
     socialLinks: parseSocialLinks(page.social_links),
     links: links
       .sort((a, b) => a.position - b.position)
@@ -119,6 +121,8 @@ export function configToBioPagePayload(
     avatar_url: config.avatarUrl || null,
     whatsapp: config.whatsapp || null,
     email: config.email || null,
+    category: config.category || null,
+    country: config.country || null,
     theme: config.theme === 'Classic' ? 'classic' : 'dark',
     primary_color: config.primaryColor,
     button_style: config.buttonStyle,
