@@ -1,4 +1,5 @@
 import type { BioPageConfig, ShortLink } from '../types';
+import type { PendingPayment } from './payments';
 import type { PlanId } from './plans';
 import { normalizePlan } from './plans';
 
@@ -9,6 +10,7 @@ const KEYS = {
   analytics: 'jahlink:analytics',
   session: 'jahlink:session',
   qr: 'jahlink:qr',
+  pendingPayment: 'jahlink:pending_payment',
 } as const;
 
 function readJson<T>(key: string, fallback: T): T {
@@ -127,4 +129,6 @@ export const localStore = {
   },
   loadQrCodes: () => readJson<QrCodeRecord[]>(KEYS.qr, []),
   saveQrCodes: (qr: QrCodeRecord[]) => writeJson(KEYS.qr, qr),
+  loadPendingPayment: () => readJson<PendingPayment | null>(KEYS.pendingPayment, null),
+  savePendingPayment: (payment: PendingPayment | null) => writeJson(KEYS.pendingPayment, payment),
 };

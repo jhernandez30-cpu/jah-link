@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Link2, QrCode, TrendingUp, Layers, Check, ArrowRight, Menu, X } from 'lucide-react';
 import BrandLogo from './BrandLogo';
-import { PLAN_DEFINITIONS } from '../lib/plans';
+import { PLAN_DEFINITIONS, type PlanId } from '../lib/plans';
+import { useApp } from '../context/AppContext';
 
 const features = [
   { icon: Link2, title: 'Enlaces cortos', desc: 'Acorta URLs con slugs personalizados y seguimiento de clics.' },
@@ -21,6 +22,18 @@ const plans = [
 
 export default function LandingPage() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const { isAuthenticated } = useApp();
+
+  const getPlanHref = (plan: PlanId) => {
+    if (plan === 'gratis') return isAuthenticated ? '/dashboard' : '/register?plan=gratis';
+    return isAuthenticated ? `/checkout?plan=${plan}` : `/register?plan=${plan}`;
+  };
+
+  const getPlanCta = (plan: PlanId) => {
+    if (plan === 'gratis') return 'Empezar gratis';
+    if (plan === 'pro') return 'Actualizar a Pro';
+    return 'Actualizar a Business';
+  };
 
   return (
     <div className="min-h-screen bg-black text-white overflow-x-hidden">
@@ -143,12 +156,12 @@ export default function LandingPage() {
                 ))}
               </ul>
               <Link
-                to={`/register?plan=${p.id}`}
+                to={getPlanHref(p.id)}
                 className={`mt-8 block text-center py-3 rounded-xl text-sm font-semibold ${
                   p.highlight ? 'btn-brand' : 'border border-[var(--border)] hover:bg-white/5'
                 }`}
               >
-                Empezar
+                {getPlanCta(p.id)}
               </Link>
             </div>
           ))}

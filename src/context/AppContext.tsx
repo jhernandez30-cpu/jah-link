@@ -31,12 +31,18 @@ import {
   updateProfile,
   uploadAvatar,
   createQrCode,
+  createPendingPayment,
   deleteQrCode,
+  getPendingPayment,
+  getRecentPayments,
   StorageError,
   type AnalyticsEvent,
   type QrCodeRecord,
   type StoredUser,
   type BioPageWithId,
+  type PaidPlanId,
+  type PendingPayment,
+  type PlanPayment,
   type RedirectResult,
 } from '../lib/storage';
 import {
@@ -47,7 +53,13 @@ import {
   normalizePlan,
   type PlanId,
 } from '../lib/plans';
-import { generateSlug, isValidSlug, isValidUrl, normalizeUrl } from '../lib/validation';
+import {
+  generateSlug,
+  isValidDestinationUrl,
+  isValidSlug,
+  normalizeDestinationUrl,
+  sanitizeSlug,
+} from '../lib/validation';
 import { isReservedSlug } from '../lib/reservedSlugs';
 
 interface AppContextValue {
@@ -64,12 +76,16 @@ interface AppContextValue {
   isSupabaseMode: boolean;
   error: string | null;
   successMessage: string | null;
+  pendingPayment: PendingPayment | null;
+  paymentHistory: PlanPayment[];
   clearMessages: () => void;
   signIn: (email: string, password: string) => Promise<boolean>;
   signUp: (email: string, password: string, name: string, requestedPlan?: PlanId | null) => Promise<boolean>;
   logout: () => Promise<void>;
   refreshData: () => Promise<void>;
+  refreshProfile: () => Promise<StoredUser | null>;
   updateUserProfile: (patch: Partial<StoredUser>) => Promise<boolean>;
+  createPlanPaymentIntent: (plan: PaidPlanId) => Promise<PendingPayment | null>;
   uploadUserAvatar: (file: File) => Promise<string | null>;
   addLink: (input: Omit<ShortLink, 'id' | 'clicks' | 'createdAt'>) => Promise<ShortLink | null>;
   updateLink: (id: string, patch: Partial<ShortLink>) => Promise<void>;
@@ -128,6 +144,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [pendingPayment, setPendingPayment] = useState<PendingPayment | null>(null);
+  const [paymentHistory, setPaymentHistory] = useState<PlanPayment[]>([]);
 
   const clearMessages = useCallback(() => {
     setError(null);
@@ -137,11 +155,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refreshData = useCallback(async () => {
     setLoading(true);
     try {
-      const [linksData, bioData, events, qr] = await Promise.all([
+      const [linksData, bioData, events, qr, payment, payments] = await Promise.all([
         getShortLinks().catch(() => []),
         getBioPage().catch(() => null),
         getAnalyticsEvents().catch(() => []),
         getQrCodes().catch(() => []),
+        getPendingPayment().catch(() => null),
+        getRecentPayments().catch(() => []),
       ]);
       setLinks(linksData);
       if (bioData) {
@@ -151,6 +171,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       setAnalyticsEvents(filterAnalyticsForPlan(events, user?.plan ?? 'gratis'));
       setQrCodes(qr);
+      setPendingPayment(payment);
+      setPaymentHistory(payments);
     } catch (e) {
       setError(mapStorageError(e));
     } finally {
@@ -162,10 +184,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const profile = await getCurrentProfile();
       setUser(profile);
+      return profile;
     } catch {
       setUser(null);
+      return null;
     }
   }, []);
+
+  const refreshProfile = useCallback(async () => loadProfile(), [loadProfile]);
 
   useEffect(() => {
     const unsub = onAuthStateChange(async (signedIn) => {
@@ -179,6 +205,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setLinks([]);
         setQrCodes([]);
         setAnalyticsEvents([]);
+        setPendingPayment(null);
+        setPaymentHistory([]);
       }
     });
     return () => {
@@ -251,6 +279,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [clearMessages]);
 
+  const createPlanPaymentIntent = useCallback(async (plan: PaidPlanId) => {
+    clearMessages();
+    try {
+      const updated = await updateProfile({ requestedPlan: plan });
+      setUser(updated);
+      const payment = await createPendingPayment(plan);
+      setPendingPayment(payment);
+      setSuccessMessage('Pago pendiente de confirmación. Tu plan se activará después de verificar el pago.');
+      return payment;
+    } catch (e) {
+      setError(mapStorageError(e));
+      return null;
+    }
+  }, [clearMessages]);
+
   const uploadUserAvatar = useCallback(async (file: File) => {
     clearMessages();
     try {
@@ -274,23 +317,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await signOut();
     setIsAuthenticated(false);
     setUser(null);
-    setLinks([]);
+      setLinks([]);
+      setPendingPayment(null);
+      setPaymentHistory([]);
   }, []);
 
   const addLink = useCallback(
     async (input: Omit<ShortLink, 'id' | 'clicks' | 'createdAt'>): Promise<ShortLink | null> => {
       clearMessages();
-      const slug =
-        input.slug ?? input.shortUrl.split('/').pop() ?? generateSlug();
+      const slug = sanitizeSlug(
+        input.slug ?? input.shortUrl.split('/').pop() ?? generateSlug(),
+      );
 
       if (!isValidSlug(slug)) {
         setError('Este slug está reservado o no es válido.');
         return null;
       }
 
-      const destination = normalizeUrl(input.destination);
-      if (!isValidUrl(destination)) {
-        setError('URL inválida.');
+      const destination = normalizeDestinationUrl(input.destination);
+      if (!isValidDestinationUrl(destination)) {
+        setError('Ingresa una URL válida. Ejemplo: https://ejemplo.com');
         return null;
       }
 
@@ -339,12 +385,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const updateLink = useCallback(async (id: string, patch: Partial<ShortLink>) => {
     clearMessages();
+    const destination = patch.destination === undefined
+      ? undefined
+      : normalizeDestinationUrl(patch.destination);
+    if (destination !== undefined && !isValidDestinationUrl(destination)) {
+      setError('Ingresa una URL válida. Ejemplo: https://ejemplo.com');
+      return;
+    }
+
+    const slug = patch.slug === undefined ? undefined : sanitizeSlug(patch.slug);
+    if (slug !== undefined && !isValidSlug(slug)) {
+      setError('Este slug está reservado o no es válido.');
+      return;
+    }
+
     try {
       const updated = await updateShortLink(id, {
         title: patch.title,
-        destination: patch.destination,
-        slug: patch.slug,
-        isActive: patch.active !== false,
+        destination,
+        slug,
+        isActive: patch.active === undefined ? undefined : patch.active !== false,
       });
       setLinks((prev) => prev.map((l) => (l.id === id ? updated : l)));
       setSuccessMessage('Cambios guardados correctamente.');
@@ -446,12 +506,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       isSupabaseMode: supabaseMode,
       error,
       successMessage,
+      pendingPayment,
+      paymentHistory,
       clearMessages,
       signIn,
       signUp,
       logout,
       refreshData,
+      refreshProfile,
       updateUserProfile,
+      createPlanPaymentIntent,
       uploadUserAvatar,
       addLink,
       updateLink,
@@ -478,12 +542,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       supabaseMode,
       error,
       successMessage,
+      pendingPayment,
+      paymentHistory,
       clearMessages,
       signIn,
       signUp,
       logout,
       refreshData,
+      refreshProfile,
       updateUserProfile,
+      createPlanPaymentIntent,
       uploadUserAvatar,
       addLink,
       updateLink,

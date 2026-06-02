@@ -31,6 +31,9 @@ export default function SettingsView() {
     bioConfig,
     saveBioConfig,
     updateUserProfile,
+    createPlanPaymentIntent,
+    pendingPayment,
+    paymentHistory,
     uploadUserAvatar,
     isSupabaseMode,
   } = useApp();
@@ -40,6 +43,14 @@ export default function SettingsView() {
   const planInfo = getPlanDefinition(plan);
   const requestedPlanLabel = user?.requestedPlan ? getPlanLabel(user.requestedPlan) : null;
   const remainingLinks = getRemainingShortLinks(plan, links.length);
+  const pendingPlan = pendingPayment?.plan ??
+    (user?.requestedPlan === 'pro' || user?.requestedPlan === 'business' ? user.requestedPlan : null);
+  const pendingPlanInfo = pendingPlan ? getPlanDefinition(pendingPlan) : null;
+  const activePlanMessage = plan === 'business'
+    ? 'Plan Business activo'
+    : plan === 'pro'
+      ? 'Plan Pro activo'
+      : null;
 
   const [name, setName] = useState(user?.name ?? '');
   const [email, setEmail] = useState(user?.email ?? '');
@@ -50,6 +61,7 @@ export default function SettingsView() {
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl ?? bioConfig.avatarUrl ?? '');
   const [primaryColor, setPrimaryColor] = useState(bioConfig.primaryColor || '#006BFF');
   const [localError, setLocalError] = useState('');
+  const [localNotice, setLocalNotice] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -137,7 +149,30 @@ export default function SettingsView() {
   };
 
   const requestProPlan = async () => {
-    await updateUserProfile({ requestedPlan: 'pro' });
+    navigate('/checkout?plan=pro');
+  };
+
+  const requestBusinessPlan = () => {
+    navigate('/checkout?plan=business');
+  };
+
+  const completePendingPayment = async () => {
+    if (!pendingPlan) return;
+    await createPlanPaymentIntent(pendingPlan);
+    navigate(`/checkout?plan=${pendingPlan}`);
+  };
+
+  const markPaidNotice = () => {
+    setLocalNotice('Si ya completaste el pago, PayPal lo verificará automáticamente. Esto puede tomar unos minutos.');
+  };
+
+  const paymentStatusLabel = (status: string) => {
+    if (status === 'completed') return 'completado';
+    if (status === 'approved') return 'aprobado';
+    if (status === 'failed') return 'fallido';
+    if (status === 'cancelled') return 'cancelado';
+    if (status === 'refunded') return 'reembolsado';
+    return 'pendiente';
   };
 
   return (
@@ -155,6 +190,11 @@ export default function SettingsView() {
       {localError && (
         <p className="text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl">
           {localError}
+        </p>
+      )}
+      {localNotice && (
+        <p className="text-sm text-brand-green bg-brand-green/10 border border-brand-green/20 p-3 rounded-xl">
+          {localNotice}
         </p>
       )}
 
@@ -260,6 +300,9 @@ export default function SettingsView() {
             <p className="text-xs uppercase tracking-wider text-[var(--text-secondary)]">Plan actual</p>
             <p className="text-2xl font-bold text-white mt-1">Plan {planInfo.label}</p>
             <p className="text-sm text-brand-cyan mt-1">{planInfo.membership}</p>
+            {activePlanMessage && (
+              <p className="text-xs text-brand-green mt-3">{activePlanMessage}</p>
+            )}
             {plan === 'gratis' && (
               <p className="text-sm text-[var(--text-secondary)] mt-3">
                 Estas usando el plan gratuito. Actualiza a Pro para desbloquear mas funciones.
@@ -271,6 +314,43 @@ export default function SettingsView() {
               </p>
             )}
           </div>
+
+          {pendingPlanInfo && (
+            <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 space-y-3">
+              <div>
+                <p className="text-xs uppercase tracking-wider text-amber-300 font-bold">Pago pendiente de confirmación</p>
+                <p className="text-sm text-white mt-1">Plan solicitado: {pendingPlanInfo.label}</p>
+                <p className="text-xs text-[var(--text-secondary)] mt-1">
+                  Tu plan se activará después de verificar el pago.
+                </p>
+                <p className="text-xs text-[var(--text-secondary)] mt-1">
+                  Si ya completaste el pago, PayPal lo verificará automáticamente. Esto puede tomar unos minutos.
+                </p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <button
+                  type="button"
+                  onClick={() => void completePendingPayment()}
+                  className="btn-brand px-4 py-2.5 rounded-xl text-xs"
+                >
+                  Completar pago
+                </button>
+                <button
+                  type="button"
+                  onClick={markPaidNotice}
+                  className="px-4 py-2.5 rounded-xl border border-[var(--border)] text-xs text-white hover:bg-white/5"
+                >
+                  Ya realicé el pago
+                </button>
+                <a
+                  href="mailto:soporte@jah.link"
+                  className="px-4 py-2.5 rounded-xl border border-[var(--border)] text-xs text-white hover:bg-white/5 text-center"
+                >
+                  Contactar soporte
+                </a>
+              </div>
+            </div>
+          )}
 
           <div className="grid sm:grid-cols-2 gap-3">
             {usage.map((item) => (
@@ -293,9 +373,33 @@ export default function SettingsView() {
             </ul>
           </div>
 
+          {paymentHistory.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold uppercase text-[var(--text-secondary)] mb-2">Pagos recientes</p>
+              <div className="space-y-2">
+                {paymentHistory.slice(0, 4).map((payment) => (
+                  <div key={payment.id ?? `${payment.plan}-${payment.createdAt}`} className="rounded-xl bg-black/50 border border-[var(--border)] p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold text-white">Plan {getPlanLabel(payment.plan)}</p>
+                      <span className="text-[10px] uppercase tracking-wider text-brand-cyan">
+                        {paymentStatusLabel(payment.status)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-[var(--text-secondary)] mt-1">
+                      ${payment.amount}/{payment.currency} · PayPal
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-wrap gap-3">
             <button type="button" onClick={requestProPlan} className="btn-brand px-5 py-2.5 rounded-xl text-sm">
-              Actualizar plan
+              Actualizar a Pro
+            </button>
+            <button type="button" onClick={requestBusinessPlan} className="px-5 py-2.5 rounded-xl border border-[var(--border)] text-sm text-white hover:bg-white/5">
+              Actualizar a Business
             </button>
             {isPaidPlan(plan) && (
               <button type="button" className="px-5 py-2.5 rounded-xl border border-[var(--border)] text-sm text-white hover:bg-white/5">

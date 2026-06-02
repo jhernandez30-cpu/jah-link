@@ -3,6 +3,8 @@ import { AppProvider } from './context/AppContext';
 import LandingPage from './components/LandingPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
+import CheckoutPage from './pages/CheckoutPage';
+import PaymentSuccessPage from './pages/PaymentSuccessPage';
 import DashboardLayout from './layouts/DashboardLayout';
 import ProtectedRoute from './pages/ProtectedRoute';
 import ShortLinkResolver from './pages/ShortLinkResolver';
@@ -73,6 +75,8 @@ function AppRoutes() {
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/checkout" element={<CheckoutPage />} />
+      <Route path="/payment/success" element={<PaymentSuccessPage />} />
       <Route
         path="/dashboard"
         element={

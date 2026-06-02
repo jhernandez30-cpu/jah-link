@@ -136,6 +136,44 @@ create table if not exists public.analytics_events (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.payments (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  plan text not null check (plan in ('pro', 'business')),
+  amount numeric not null,
+  currency text not null default 'USD',
+  provider text not null default 'paypal',
+  provider_order_id text,
+  provider_capture_id text,
+  provider_payer_id text,
+  provider_webhook_event_id text unique,
+  provider_payment_url text,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'completed', 'failed', 'cancelled', 'refunded')),
+  raw_response jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.payments add column if not exists provider_order_id text;
+alter table public.payments add column if not exists provider_capture_id text;
+alter table public.payments add column if not exists provider_payer_id text;
+alter table public.payments add column if not exists provider_webhook_event_id text;
+alter table public.payments add column if not exists provider_payment_url text;
+
+create table if not exists public.subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  plan text not null check (plan in ('gratis', 'pro', 'business')),
+  status text not null default 'active',
+  provider text not null default 'paypal',
+  provider_order_id text,
+  provider_capture_id text,
+  current_period_start timestamptz default now(),
+  current_period_end timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 -- Normalize legacy event names before adding checks.
 update public.analytics_events
 set event_type = case
@@ -159,6 +197,15 @@ create index if not exists qr_codes_user_id_idx on public.qr_codes(user_id);
 create index if not exists analytics_events_user_id_idx on public.analytics_events(user_id);
 create index if not exists analytics_events_entity_idx on public.analytics_events(entity_type, entity_id);
 create index if not exists analytics_events_created_at_idx on public.analytics_events(created_at desc);
+create index if not exists payments_user_id_idx on public.payments(user_id);
+create index if not exists payments_user_status_idx on public.payments(user_id, status);
+create index if not exists payments_user_plan_status_idx on public.payments(user_id, plan, status);
+create unique index if not exists payments_provider_order_id_uidx on public.payments(provider_order_id) where provider_order_id is not null;
+create unique index if not exists payments_webhook_event_id_uidx on public.payments(provider_webhook_event_id) where provider_webhook_event_id is not null;
+create index if not exists payments_created_at_idx on public.payments(created_at desc);
+create index if not exists subscriptions_user_id_idx on public.subscriptions(user_id);
+create index if not exists subscriptions_user_status_idx on public.subscriptions(user_id, status);
+create index if not exists subscriptions_provider_order_id_idx on public.subscriptions(provider_order_id);
 
 -- Constraints. These DO blocks make the file safe to run again.
 do $$
@@ -207,6 +254,36 @@ begin
   end if;
   if not exists (select 1 from pg_constraint where conname = 'analytics_events_event_type_check') then
     alter table public.analytics_events add constraint analytics_events_event_type_check check (event_type in ('view', 'click', 'scan'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'payments_plan_check') then
+    alter table public.payments add constraint payments_plan_check check (plan in ('pro', 'business'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'payments_amount_positive') then
+    alter table public.payments add constraint payments_amount_positive check (amount > 0);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'payments_currency_check') then
+    alter table public.payments add constraint payments_currency_check check (currency = 'USD');
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'payments_provider_check') then
+    alter table public.payments add constraint payments_provider_check check (provider = 'paypal');
+  end if;
+end $$;
+
+alter table public.payments drop constraint if exists payments_status_check;
+alter table public.payments
+  add constraint payments_status_check
+  check (status in ('pending', 'approved', 'completed', 'failed', 'cancelled', 'refunded'));
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'subscriptions_plan_check') then
+    alter table public.subscriptions add constraint subscriptions_plan_check check (plan in ('gratis', 'pro', 'business'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'subscriptions_status_check') then
+    alter table public.subscriptions add constraint subscriptions_status_check check (status in ('active', 'cancelled', 'past_due', 'review'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'subscriptions_provider_check') then
+    alter table public.subscriptions add constraint subscriptions_provider_check check (provider = 'paypal');
   end if;
 end $$;
 
@@ -263,6 +340,29 @@ create trigger profiles_membership_sync
   before insert or update of plan on public.profiles
   for each row execute function public.sync_profile_membership();
 
+-- Prevent browser clients from changing paid plan fields directly.
+create or replace function public.prevent_client_plan_update()
+returns trigger
+language plpgsql
+as $$
+begin
+  if coalesce(auth.role(), '') <> 'service_role'
+    and (
+      new.plan is distinct from old.plan
+      or new.membership is distinct from old.membership
+    )
+  then
+    raise exception 'Plan changes must be performed by the secure backend.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_plan_update_guard on public.profiles;
+create trigger profiles_plan_update_guard
+  before update of plan, membership on public.profiles
+  for each row execute function public.prevent_client_plan_update();
+
 drop trigger if exists profiles_updated_at on public.profiles;
 create trigger profiles_updated_at before update on public.profiles
   for each row execute function public.set_updated_at();
@@ -281,6 +381,14 @@ create trigger bio_links_updated_at before update on public.bio_links
 
 drop trigger if exists qr_codes_updated_at on public.qr_codes;
 create trigger qr_codes_updated_at before update on public.qr_codes
+  for each row execute function public.set_updated_at();
+
+drop trigger if exists payments_updated_at on public.payments;
+create trigger payments_updated_at before update on public.payments
+  for each row execute function public.set_updated_at();
+
+drop trigger if exists subscriptions_updated_at on public.subscriptions;
+create trigger subscriptions_updated_at before update on public.subscriptions
   for each row execute function public.set_updated_at();
 
 -- Create profile automatically when a Supabase Auth user registers.
@@ -514,6 +622,8 @@ alter table public.bio_pages enable row level security;
 alter table public.bio_links enable row level security;
 alter table public.qr_codes enable row level security;
 alter table public.analytics_events enable row level security;
+alter table public.payments enable row level security;
+alter table public.subscriptions enable row level security;
 
 drop policy if exists "profiles_select_own" on public.profiles;
 drop policy if exists "profiles_insert_own" on public.profiles;
@@ -628,6 +738,37 @@ create policy "analytics_insert_controlled"
     and event_type in ('view', 'click', 'scan')
     and (user_id is null or auth.uid() = user_id)
   );
+
+drop policy if exists "payments_select_own" on public.payments;
+drop policy if exists "payments_insert_pending_own" on public.payments;
+drop policy if exists "payments_update_own" on public.payments;
+drop policy if exists "payments_delete_own" on public.payments;
+drop policy if exists "Users can read their own payments" on public.payments;
+drop policy if exists "Users can insert their own pending payments" on public.payments;
+
+create policy "Users can read their own payments"
+  on public.payments for select to authenticated
+  using (auth.uid() = user_id);
+
+create policy "Users can insert their own pending payments"
+  on public.payments for insert to authenticated
+  with check (
+    auth.uid() = user_id
+    and status = 'pending'
+    and provider = 'paypal'
+    and currency = 'USD'
+    and plan in ('pro', 'business')
+  );
+
+drop policy if exists "subscriptions_select_own" on public.subscriptions;
+drop policy if exists "subscriptions_insert_own" on public.subscriptions;
+drop policy if exists "subscriptions_update_own" on public.subscriptions;
+drop policy if exists "subscriptions_delete_own" on public.subscriptions;
+drop policy if exists "Users can read their own subscriptions" on public.subscriptions;
+
+create policy "Users can read their own subscriptions"
+  on public.subscriptions for select to authenticated
+  using (auth.uid() = user_id);
 
 -- Optional storage setup for uploaded avatars:
 -- insert into storage.buckets (id, name, public)

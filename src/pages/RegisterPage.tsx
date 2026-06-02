@@ -38,7 +38,9 @@ export default function RegisterPage() {
     setSubmitting(true);
     const ok = await signUp(email.trim(), password, name.trim(), requestedPlan);
     setSubmitting(false);
-    if (ok) navigate('/dashboard', { replace: true });
+    if (ok) {
+      navigate(requestedPlan === 'gratis' ? '/dashboard' : `/checkout?plan=${requestedPlan}`, { replace: true });
+    }
   };
 
   const displayError = localError || error;

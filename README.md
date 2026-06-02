@@ -15,6 +15,8 @@ Este proyecto usa **Vite + React**, no Next.js. Por eso las variables publicas c
 ```env
 VITE_SUPABASE_URL=your_supabase_project_url
 VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+VITE_PAYPAL_CLIENT_ID=your_paypal_client_id
+VITE_PAYPAL_CURRENCY=USD
 ```
 
 No uses `NEXT_PUBLIC_SUPABASE_URL` ni `NEXT_PUBLIC_SUPABASE_ANON_KEY` en esta app.
@@ -35,6 +37,8 @@ No uses `NEXT_PUBLIC_SUPABASE_URL` ni `NEXT_PUBLIC_SUPABASE_ANON_KEY` en esta ap
    ```env
    VITE_SUPABASE_URL=https://tu-proyecto.supabase.co
    VITE_SUPABASE_ANON_KEY=tu_anon_key
+   VITE_PAYPAL_CLIENT_ID=tu_paypal_client_id
+   VITE_PAYPAL_CURRENCY=USD
    ```
    > **Nota**: Si dejas estas variables vacías, JAH Link funcionará automáticamente en **modo demo** con `localStorage` local, permitiendo probar toda la funcionalidad sin configurar base de datos. En producción, estas variables se configurarán en Vercel para conectar Supabase.
 
@@ -90,6 +94,8 @@ Pasos para producción:
    ```env
    VITE_SUPABASE_URL=your_supabase_project_url
    VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+   VITE_PAYPAL_CLIENT_ID=your_paypal_client_id
+   VITE_PAYPAL_CURRENCY=USD
    ```
    Ruta: **Project Settings → Environment Variables**.
 5. Haz **Redeploy** del proyecto en Vercel.
@@ -149,6 +155,44 @@ Flujo esperado:
 
 El modo demo/localStorage solo se usa en desarrollo local cuando faltan `VITE_SUPABASE_URL` o `VITE_SUPABASE_ANON_KEY`. En producción, si Supabase está configurado, el banner demo no aparece y la app usa Supabase real.
 
+## PayPal Checkout automático y Webhooks
+
+JAH Link usa PayPal Buttons programáticos como flujo principal para Pro y Business. El SDK se carga desde React/Vite con `src/lib/loadPayPalSdk.ts`, pero la activación del plan ocurre solo en Vercel Serverless Functions usando `PAYPAL_CLIENT_SECRET` y `SUPABASE_SERVICE_ROLE_KEY`.
+
+- Endpoint create order: `/api/paypal/create-order`.
+- Endpoint capture order: `/api/paypal/capture-order`.
+- Webhook PayPal: `/api/paypal/webhook`.
+- Business Hosted Button ID `3DP34KZHDUYFG` queda como respaldo visual, no como activación automática.
+- Pro link fallback: `https://www.paypal.com/ncp/payment/KXKYAMRPDNKXG`.
+- Business link fallback: `https://www.paypal.com/ncp/payment/3DP34KZHDUYFG`.
+- Client ID se configura con `VITE_PAYPAL_CLIENT_ID`.
+- Moneda se configura con `VITE_PAYPAL_CURRENCY=USD`.
+- La ruta de retorno configurada en PayPal es `/payment/success`.
+
+Flujo actual:
+
+1. El usuario elige Pro o Business desde la landing.
+2. Si no tiene sesión, va a `/register?plan=pro` o `/register?plan=business`.
+3. Si tiene sesión, va a `/checkout?plan=pro` o `/checkout?plan=business`.
+4. El botón PayPal llama a `/api/paypal/create-order`.
+5. El backend valida usuario, plan y precio desde `api/_lib/plans.js`; no confía en precios del frontend.
+6. PayPal aprueba el pago y el frontend llama a `/api/paypal/capture-order`.
+7. Si PayPal devuelve `COMPLETED`, el backend marca `payments.status = completed`, crea/actualiza `subscriptions` y actualiza `profiles.plan`.
+8. El webhook `/api/paypal/webhook` verifica firma con `PAYPAL_WEBHOOK_ID` y procesa eventos duplicados de forma idempotente.
+9. `/payment/success` solo muestra estado y refresca perfil; no activa planes.
+
+Regla crítica: el plan no se activa por hacer clic en PayPal ni por volver desde `/payment/success`. La activación ocurre únicamente desde funciones backend seguras tras capture/webhook verificado.
+
+Eventos webhook configurados:
+
+- Checkout order approved
+- Payment capture completed
+- Payment capture denied
+- Payment capture refunded
+- Payment capture reversed
+
+Si las tablas `payments` o `subscriptions` todavía no existen, ejecuta `supabase/schema.sql` completo. El modo demo/localStorage no activa planes pagados.
+
 ## Pendientes de producción
 
 1. Abrir el proyecto de Supabase conectado a JAH Link.
@@ -159,15 +203,28 @@ El modo demo/localStorage solo se usa en desarrollo local cuando faltan `VITE_SU
    ```env
    VITE_SUPABASE_URL=your_supabase_project_url
    VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+   VITE_PAYPAL_CLIENT_ID=your_paypal_client_id
+   VITE_PAYPAL_CURRENCY=USD
+   PAYPAL_CLIENT_ID=your_paypal_client_id
+   PAYPAL_CLIENT_SECRET=your_paypal_client_secret
+   PAYPAL_ENV=sandbox
+   PAYPAL_WEBHOOK_ID=your_paypal_webhook_id
+   SUPABASE_URL=your_supabase_project_url
+   SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
    ```
 6. Confirmar configuración de Vercel:
    - Build command: `npm run build`
    - Output directory: `dist`
-7. Hacer **Redeploy** en Vercel.
-8. Verificar en producción:
+7. Configurar webhook en PayPal Developer Dashboard:
+   - URL: `https://jah.link/api/paypal/webhook`
+   - Eventos: Checkout order approved, Payment capture completed, Payment capture denied, Payment capture refunded, Payment capture reversed
+   - Copiar el Webhook ID a `PAYPAL_WEBHOOK_ID`.
+8. Hacer **Redeploy** en Vercel.
+9. Verificar en producción:
    - Registro
    - Login
    - Perfil de usuario
+   - Pago sandbox Pro y Business
    - Enlaces cortos y redirección por slug
    - Página bio pública
    - Códigos QR
@@ -176,7 +233,7 @@ El modo demo/localStorage solo se usa en desarrollo local cuando faltan `VITE_SU
 ## Planes y comportamiento
 
 - Todo usuario nuevo inicia siempre en **Plan Gratis**.
-- Si alguien selecciona Pro o Business desde la landing, JAH Link guarda solo la intención de plan solicitado. No activa funciones pagadas hasta completar pago o asignación manual.
+- Si alguien selecciona Pro o Business desde la landing, JAH Link guarda solo la intención de plan solicitado. No activa funciones pagadas hasta capture PayPal `COMPLETED` o webhook verificado.
 - Plan Gratis permite 10 enlaces cortos, 1 página bio, QR básicos, analítica de 7 días y branding "Creado con JAH Link".
 - Plan Pro prepara enlaces ilimitados, dominio personalizado, QR avanzados, analítica de 90 días y personalización avanzada.
 - Plan Business prepara equipos, API, soporte prioritario, marca blanca y analítica avanzada.
@@ -231,6 +288,11 @@ El modo demo/localStorage solo se usa en desarrollo local cuando faltan `VITE_SU
 |------|-------------|
 | `/` | Landing |
 | `/login`, `/register` | Supabase Auth |
+| `/checkout?plan=pro`, `/checkout?plan=business` | Checkout PayPal automático con create/capture order |
+| `/payment/success?plan=pro`, `/payment/success?plan=business` | Retorno PayPal; refresca estado pero no activa planes |
+| `/api/paypal/create-order` | Crea orden PayPal desde backend |
+| `/api/paypal/capture-order` | Captura orden y activa plan si PayPal confirma `COMPLETED` |
+| `/api/paypal/webhook` | Webhook PayPal con verificación de firma |
 | `/dashboard` | Panel (protegido) |
 | `/dashboard/links` | Enlaces cortos |
 | `/dashboard/bio` | Editor página bio |
@@ -246,6 +308,12 @@ El modo demo/localStorage solo se usa en desarrollo local cuando faltan `VITE_SU
 |---------|-----|
 | `src/lib/supabase.ts` | Cliente Supabase |
 | `src/lib/storage.ts` | API async (Supabase + fallback local) |
+| `src/lib/paypal.ts` | Configuración centralizada PayPal Hosted Buttons |
+| `src/lib/loadPayPalSdk.ts` | Loader único del SDK PayPal |
+| `src/lib/payments.ts` | Estado de pagos PayPal en frontend |
+| `api/_lib/paypal.js` | PayPal REST API backend |
+| `api/_lib/activatePlan.js` | Activación segura de planes y subscriptions |
+| `api/_lib/supabaseAdmin.js` | Cliente Supabase service role solo backend |
 | `src/lib/storageLocal.ts` | Fallback demo |
 | `src/context/AppContext.tsx` | Estado global y acciones UI |
 
@@ -288,6 +356,7 @@ Assets en `public/brand/`. Componente: `src/components/BrandLogo.tsx`.
 ## Pendientes
 
 - Confirmación de email en producción
+- Probar PayPal Webhooks en sandbox y luego cambiar `PAYPAL_ENV=live`
 - Dominios personalizados
 - Edge Function para redirección ultra-rápida
 - Tests E2E (Playwright)

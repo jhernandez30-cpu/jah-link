@@ -1,3 +1,5 @@
+import { PAYPAL_PAYMENT_LINKS } from './paypal';
+
 export const PLAN_IDS = ['gratis', 'pro', 'business'] as const;
 
 export type PlanId = (typeof PLAN_IDS)[number];
@@ -20,9 +22,19 @@ export type PlanDefinition = {
   membership: 'Miembro Gratis' | 'Miembro Pro' | 'Miembro Business';
   description: string;
   price: string;
+  amount: number;
+  currency: 'USD';
+  paypalProductName?: 'JAH Link Pro' | 'JAH Link Business';
   benefits: string[];
   limits: PlanLimits;
+  paypalPaymentUrl: string | null;
+  requiresPayment: boolean;
 };
+
+export const PAYPAL_PAYMENT_URLS = {
+  pro: PAYPAL_PAYMENT_LINKS.pro,
+  business: PAYPAL_PAYMENT_LINKS.business,
+} as const;
 
 export const FREE_PLAN_LIMIT_MESSAGE =
   'Has alcanzado el límite del plan Gratis. Actualiza a Pro para continuar.';
@@ -40,6 +52,8 @@ export const PLAN_DEFINITIONS: Record<PlanId, PlanDefinition> = {
     membership: 'Miembro Gratis',
     description: 'Estás usando el plan gratuito.',
     price: '$0',
+    amount: 0,
+    currency: 'USD',
     benefits: [
       '10 enlaces cortos',
       '1 página bio',
@@ -58,6 +72,8 @@ export const PLAN_DEFINITIONS: Record<PlanId, PlanDefinition> = {
       advancedApi: false,
       advancedCustomization: false,
     },
+    paypalPaymentUrl: null,
+    requiresPayment: false,
   },
   pro: {
     id: 'pro',
@@ -65,6 +81,9 @@ export const PLAN_DEFINITIONS: Record<PlanId, PlanDefinition> = {
     membership: 'Miembro Pro',
     description: 'Plan para creadores, negocios y equipos pequeños.',
     price: '$12',
+    amount: 12,
+    currency: 'USD',
+    paypalProductName: 'JAH Link Pro',
     benefits: [
       'Enlaces ilimitados',
       'Dominio personalizado',
@@ -83,6 +102,8 @@ export const PLAN_DEFINITIONS: Record<PlanId, PlanDefinition> = {
       advancedApi: false,
       advancedCustomization: true,
     },
+    paypalPaymentUrl: PAYPAL_PAYMENT_URLS.pro,
+    requiresPayment: true,
   },
   business: {
     id: 'business',
@@ -90,6 +111,9 @@ export const PLAN_DEFINITIONS: Record<PlanId, PlanDefinition> = {
     membership: 'Miembro Business',
     description: 'Plan empresarial para equipos, API y marca blanca.',
     price: '$49',
+    amount: 49,
+    currency: 'USD',
+    paypalProductName: 'JAH Link Business',
     benefits: [
       'Equipos',
       'API',
@@ -108,6 +132,8 @@ export const PLAN_DEFINITIONS: Record<PlanId, PlanDefinition> = {
       advancedApi: true,
       advancedCustomization: true,
     },
+    paypalPaymentUrl: PAYPAL_PAYMENT_URLS.business,
+    requiresPayment: true,
   },
 };
 

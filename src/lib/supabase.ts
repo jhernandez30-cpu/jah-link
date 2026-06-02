@@ -186,6 +186,40 @@ export type Database = {
           created_at: string;
         };
       };
+      payments: {
+        Row: {
+          id: string;
+          user_id: string;
+          plan: 'pro' | 'business';
+          amount: number;
+          currency: string;
+          provider: string;
+          provider_order_id: string | null;
+          provider_capture_id: string | null;
+          provider_payer_id: string | null;
+          provider_webhook_event_id: string | null;
+          provider_payment_url: string | null;
+          status: 'pending' | 'approved' | 'completed' | 'failed' | 'cancelled' | 'refunded';
+          raw_response: Record<string, unknown>;
+          created_at: string;
+          updated_at: string;
+        };
+      };
+      subscriptions: {
+        Row: {
+          id: string;
+          user_id: string;
+          plan: 'gratis' | 'pro' | 'business';
+          status: 'active' | 'cancelled' | 'past_due' | 'review';
+          provider: string;
+          provider_order_id: string | null;
+          provider_capture_id: string | null;
+          current_period_start: string | null;
+          current_period_end: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+      };
     };
     Functions: {
       resolve_short_link_redirect: {

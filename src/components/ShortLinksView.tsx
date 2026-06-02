@@ -6,7 +6,13 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ShortLink } from '../types';
-import { isValidSlug, isValidUrl, normalizeUrl } from '../lib/validation';
+import {
+  generateSlug,
+  isValidDestinationUrl,
+  isValidSlug,
+  normalizeDestinationUrl,
+  sanitizeSlug,
+} from '../lib/validation';
 import { useApp } from '../context/AppContext';
 import {
   FREE_PLAN_LIMIT_MESSAGE,
@@ -85,12 +91,8 @@ export default function ShortLinksView({
   // Slogans and suggestions
   const presetTags = ['marketing', 'promo', 'social-media', 'newsletter', 'organic'];
 
-  // Safe slug generator
   const handleGenerateSlug = () => {
-    const prefixes = ['promo', 'deal', 'vip', 'summer', 'launch', 'hot', 'exclusive'];
-    const randomPrefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-    const randomNumber = Math.floor(100 + Math.random() * 900);
-    setCustomSlug(`${randomPrefix}-${randomNumber}`);
+    setCustomSlug(generateSlug(title.trim() || destinationUrl.trim()));
   };
 
   const toggleProFeature = (enabled: boolean, setter: (value: boolean) => void) => {
@@ -107,19 +109,19 @@ export default function ShortLinksView({
     setSuccessMess('');
 
     if (!destinationUrl) {
-      setErrorMess('Por favor, indica una URL de destino válida.');
+      setErrorMess('Ingresa una URL válida. Ejemplo: https://ejemplo.com');
       return;
     }
 
-    const destination = normalizeUrl(destinationUrl);
-    if (!isValidUrl(destination)) {
-      setErrorMess('La URL de destino debe ser válida (http o https).');
+    const destination = normalizeDestinationUrl(destinationUrl);
+    if (!isValidDestinationUrl(destination)) {
+      setErrorMess('Ingresa una URL válida. Ejemplo: https://ejemplo.com');
       return;
     }
 
-    const slugToUse = customSlug.trim() || Math.random().toString(36).substring(2, 8);
+    const slugToUse = sanitizeSlug(customSlug) || generateSlug(title.trim() || destination);
     if (!isValidSlug(slugToUse)) {
-      setErrorMess('El slug no es válido o está reservado. Usa letras, números y guiones.');
+      setErrorMess('El slug no es válido o está reservado. Solo letras, números, guiones y guion bajo.');
       return;
     }
 
@@ -137,7 +139,7 @@ export default function ShortLinksView({
       status: 'Active',
       passwordProtected: passwordProtection,
       expirationEnabled: expirationDate,
-      title: title.trim() || `Link a ${new URL(destinationUrl).hostname}`,
+      title: title.trim() || `Link a ${new URL(destination).hostname}`,
       domain,
       tags: selectedTags,
       qrCodeGenerated: generateQR,
@@ -253,13 +255,17 @@ export default function ShortLinksView({
                   URL de destino <span className="text-[#00CFFF] font-bold">*</span>
                 </label>
                 <input 
-                  type="url"
+                  type="text"
+                  inputMode="url"
                   required
                   placeholder="https://ejemplo.com/mi-url-larga"
                   value={destinationUrl}
                   onChange={(e) => setDestinationUrl(e.target.value)}
                   className="w-full px-4 py-3 bg-[#050505] border border-white/10 rounded-xl focus:border-[#00CFFF] focus:outline-none text-[#ffffff] text-xs font-mono transition-colors placeholder:text-slate-600"
                 />
+                <p className="text-[10px] text-slate-500">
+                  Pega aquí la URL completa a donde quieres redirigir.
+                </p>
               </div>
 
               {/* Dominio y Slug side-by-side */}
@@ -299,12 +305,15 @@ export default function ShortLinksView({
                     </span>
                     <input 
                       type="text"
-                      placeholder="custom"
+                      placeholder="mi-link"
                       value={customSlug}
-                      onChange={(e) => setCustomSlug(e.target.value.replace(/[^a-zA-Z0-9-_]/g, ''))}
+                      onChange={(e) => setCustomSlug(sanitizeSlug(e.target.value))}
                       className="w-full px-3 py-3 bg-[#050505] border border-white/10 rounded-r-xl focus:border-[#00CFFF] focus:outline-none text-[#ffffff] text-xs font-mono h-[42px]"
                     />
                   </div>
+                  <p className="text-[10px] text-slate-500">
+                    Solo letras, números, guiones y guion bajo.
+                  </p>
                 </div>
               </div>
 

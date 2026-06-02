@@ -20,6 +20,15 @@ import {
   type PlanId,
 } from './plans';
 import {
+  buildPendingPayment,
+  isPaidCheckoutPlan,
+  type PaidPlanId,
+  type PendingPayment,
+  type PaymentStatus,
+  type PlanPayment,
+} from './payments';
+import { isValidDestinationUrl, isValidSlug, normalizeDestinationUrl, sanitizeSlug } from './validation';
+import {
   localStore,
   defaultBio,
   type AnalyticsEvent,
@@ -28,6 +37,7 @@ import {
 } from './storageLocal';
 
 export type { AnalyticsEvent, QrCodeRecord, StoredUser };
+export type { PaidPlanId, PendingPayment, PlanPayment };
 export { DEMO_MODE_MESSAGE, isDemoMode, isSupabaseConfigured };
 
 export class StorageError extends Error {
@@ -384,6 +394,169 @@ async function requireUserId(): Promise<string> {
 
 // ——— Enlaces cortos ———
 
+type PaymentRow = {
+  id: string;
+  user_id: string;
+  plan: string;
+  amount: number;
+  currency: string;
+  provider: string;
+  provider_payment_url: string | null;
+  provider_order_id?: string | null;
+  provider_capture_id?: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+function normalizePaymentStatus(status: string): PaymentStatus {
+  if (status === 'confirmed') return 'completed';
+  if (
+    status === 'pending' ||
+    status === 'approved' ||
+    status === 'completed' ||
+    status === 'failed' ||
+    status === 'cancelled' ||
+    status === 'refunded'
+  ) {
+    return status;
+  }
+  return 'pending';
+}
+
+function paymentFromRow(row: PaymentRow): PlanPayment | null {
+  if (!isPaidCheckoutPlan(row.plan)) return null;
+  const fallback = buildPendingPayment(row.plan);
+  const status = normalizePaymentStatus(row.status);
+  return {
+    id: row.id,
+    userId: row.user_id,
+    plan: row.plan,
+    pendingPlan: row.plan,
+    amount: Number(row.amount),
+    currency: row.currency === 'USD' ? 'USD' : fallback.currency,
+    provider: 'paypal',
+    paymentProvider: 'paypal',
+    status,
+    paymentStatus: status,
+    providerPaymentUrl: row.provider_payment_url ?? fallback.providerPaymentUrl,
+    paymentUrl: row.provider_payment_url ?? fallback.providerPaymentUrl,
+    providerOrderId: row.provider_order_id ?? null,
+    providerCaptureId: row.provider_capture_id ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function getPendingPayment(): Promise<PendingPayment | null> {
+  const local = localStore.loadPendingPayment();
+  const sb = getSupabase();
+  if (!sb) return local;
+
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) return local;
+
+  const { data, error } = await sb
+    .from('payments')
+    .select('*')
+    .eq('user_id', user.id)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data) return local;
+
+  const rowPayment = paymentFromRow(data as PaymentRow);
+  const payment = rowPayment?.status === 'pending' ? rowPayment as PendingPayment : null;
+  if (payment) localStore.savePendingPayment(payment);
+  return payment ?? local;
+}
+
+export async function getRecentPayments(limit = 10): Promise<PlanPayment[]> {
+  const local = localStore.loadPendingPayment();
+  const sb = getSupabase();
+  if (!sb) return local ? [local] : [];
+
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) return local ? [local] : [];
+
+  const { data, error } = await sb
+    .from('payments')
+    .select('*')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error || !data) return local ? [local] : [];
+  return data
+    .map((row) => paymentFromRow(row as PaymentRow))
+    .filter((payment): payment is PlanPayment => Boolean(payment));
+}
+
+export async function createPendingPayment(plan: PaidPlanId): Promise<PendingPayment> {
+  const pending = buildPendingPayment(plan);
+  const local = localStore.loadPendingPayment();
+  const sb = getSupabase();
+
+  if (!sb) {
+    if (local?.plan === plan && local.status === 'pending') return local;
+    localStore.savePendingPayment(pending);
+    return pending;
+  }
+
+  const userId = await requireUserId();
+  await sb
+    .from('profiles')
+    .update({ requested_plan: plan })
+    .eq('id', userId);
+
+  const { data: existing } = await sb
+    .from('payments')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('plan', plan)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const existingPayment = existing ? paymentFromRow(existing as PaymentRow) : null;
+  if (existingPayment?.status === 'pending') {
+    const pendingExisting = existingPayment as PendingPayment;
+    localStore.savePendingPayment(pendingExisting);
+    return pendingExisting;
+  }
+
+  const { data, error } = await sb
+    .from('payments')
+    .insert({
+      user_id: userId,
+      plan,
+      amount: pending.amount,
+      currency: pending.currency,
+      provider: pending.provider,
+      status: pending.status,
+      provider_payment_url: pending.providerPaymentUrl,
+      raw_response: { source: 'paypal_hosted_buttons_checkout' },
+    })
+    .select()
+    .single();
+
+  if (error || !data) {
+    const fallback = { ...pending, userId };
+    localStore.savePendingPayment(fallback);
+    return fallback;
+  }
+
+  const rowPayment = paymentFromRow(data as PaymentRow);
+  const payment = rowPayment?.status === 'pending'
+    ? rowPayment as PendingPayment
+    : { ...pending, userId };
+  localStore.savePendingPayment(payment);
+  return payment;
+}
+
 export async function getShortLinks(): Promise<ShortLink[]> {
   if (isDemoMode()) return localStore.loadLinks();
 
@@ -405,6 +578,15 @@ export async function createShortLink(input: {
   slug: string;
   isActive?: boolean;
 }): Promise<ShortLink> {
+  const destination = normalizeDestinationUrl(input.destination);
+  if (!isValidDestinationUrl(destination)) {
+    throw new StorageError('url', 'Ingresa una URL válida. Ejemplo: https://ejemplo.com');
+  }
+  const slug = sanitizeSlug(input.slug);
+  if (!isValidSlug(slug)) {
+    throw new StorageError('slug', 'Este slug está reservado o no es válido.');
+  }
+
   if (isDemoMode()) {
     const links = localStore.loadLinks();
     const profile = localStore.loadUser();
@@ -413,9 +595,9 @@ export async function createShortLink(input: {
     }
     const item: ShortLink = {
       id: crypto.randomUUID(),
-      shortUrl: `jah.link/${input.slug}`,
-      destination: input.destination,
-      slug: input.slug,
+      shortUrl: `jah.link/${slug}`,
+      destination,
+      slug,
       title: input.title,
       clicks: 0,
       status: 'Active',
@@ -443,8 +625,8 @@ export async function createShortLink(input: {
     .insert({
       user_id: userId,
       title: input.title,
-      destination_url: input.destination,
-      slug: input.slug.toLowerCase(),
+      destination_url: destination,
+      slug,
       is_active: input.isActive ?? true,
     })
     .select()
@@ -463,18 +645,31 @@ export async function updateShortLink(
   id: string,
   patch: Partial<{ title: string; destination: string; slug: string; isActive: boolean }>,
 ): Promise<ShortLink> {
+  const destination = patch.destination === undefined
+    ? undefined
+    : normalizeDestinationUrl(patch.destination);
+  if (destination !== undefined && !isValidDestinationUrl(destination)) {
+    throw new StorageError('url', 'Ingresa una URL válida. Ejemplo: https://ejemplo.com');
+  }
+  const slugPatch = patch.slug === undefined ? undefined : sanitizeSlug(patch.slug);
+  if (slugPatch !== undefined && !isValidSlug(slugPatch)) {
+    throw new StorageError('slug', 'Este slug está reservado o no es válido.');
+  }
+
   if (isDemoMode()) {
     const links = localStore.loadLinks().map((l) => {
       if (l.id !== id) return l;
-      const slug = patch.slug ?? l.slug ?? '';
+      const slug = slugPatch ?? l.slug ?? '';
       return {
         ...l,
         title: patch.title ?? l.title,
-        destination: patch.destination ?? l.destination,
+        destination: destination ?? l.destination,
         slug,
         shortUrl: `jah.link/${slug}`,
         active: patch.isActive ?? l.active,
-        status: patch.isActive === false ? 'Draft' as const : 'Active' as const,
+        status: patch.isActive === undefined
+          ? l.status
+          : patch.isActive === false ? 'Draft' as const : 'Active' as const,
       };
     });
     localStore.saveLinks(links);
@@ -485,8 +680,8 @@ export async function updateShortLink(
   const sb = getSupabase()!;
   const payload: Record<string, unknown> = {};
   if (patch.title !== undefined) payload.title = patch.title;
-  if (patch.destination !== undefined) payload.destination_url = patch.destination;
-  if (patch.slug !== undefined) payload.slug = patch.slug.toLowerCase();
+  if (destination !== undefined) payload.destination_url = destination;
+  if (slugPatch !== undefined) payload.slug = slugPatch;
   if (patch.isActive !== undefined) payload.is_active = patch.isActive;
 
   const { data, error } = await sb
