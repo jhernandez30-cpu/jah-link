@@ -1,0 +1,85 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+:root {
+  --background: #000000;
+  --surface: #050816;
+  --surface-soft: #0B1020;
+  --border: rgba(255, 255, 255, 0.12);
+  --text-primary: #FFFFFF;
+  --text-secondary: #A8B3CF;
+  --brand-blue: #006BFF;
+  --brand-cyan: #00CFFF;
+  --brand-green: #22C55E;
+  --brand-gradient: linear-gradient(90deg, #006BFF, #00CFFF, #22C55E);
+}
+
+@theme {
+  --font-sans: "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-serif: "Inter", sans-serif;
+  --font-display: "Inter", sans-serif;
+  --font-mono: "Courier New", Courier, monospace;
+
+  --color-brand-cyan: #00CFFF;
+  --color-brand-blue: #006BFF;
+  --color-brand-green: #22C55E;
+  --color-dark-bg: #000000;
+  --color-dark-card: #050816;
+  --color-dark-border: rgba(255, 255, 255, 0.12);
+}
+
+body {
+  background: var(--background);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+
+.glass-panel {
+  background: rgba(5, 8, 22, 0.92);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+
+.glass-panel-glow-blue {
+  background: rgba(5, 8, 22, 0.88);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(0, 107, 255, 0.25);
+  box-shadow: 0 0 30px rgba(0, 107, 255, 0.08);
+}
+
+.glass-panel-glow-cyan {
+  background: rgba(5, 8, 22, 0.88);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(0, 207, 255, 0.3);
+  box-shadow: 0 0 30px rgba(0, 207, 255, 0.12);
+}
+
+.btn-brand {
+  background: var(--brand-gradient);
+  color: #000;
+  font-weight: 600;
+}
+
+.btn-brand:hover {
+  filter: brightness(1.08);
+}
+
+.text-glow {
+  text-shadow: 0 0 12px rgba(0, 207, 255, 0.35);
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #000;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 207, 255, 0.25);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 107, 255, 0.45);
+}

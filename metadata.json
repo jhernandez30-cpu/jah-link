@@ -1,0 +1,6 @@
+{
+  "name": "JAH Link",
+  "description": "Premium platform to manage your digital presence: create custom trackable short links, design beautiful mobile-friendly bio pages, generate dynamic QR codes, and analyze real-time performance analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
