@@ -77,11 +77,19 @@ export const defaultBio: BioPageConfig = {
   category: '',
   socialLinks: [],
   links: [],
+  banners: [],
   theme: 'Modern',
   backgroundColor: '#000000',
   primaryColor: '#006BFF',
   buttonStyle: 'rounded',
   font: 'Inter',
+  backgroundImageUrl: '',
+  backgroundOverlay: 'rgba(0,0,0,0.35)',
+  isPublic: true,
+  viewsCount: 0,
+  interactionsCount: 0,
+  qrColor: '#00CFFF',
+  qrLogoEnabled: false,
 };
 
 function normalizeStoredUser(user: StoredUser | null): StoredUser | null {
@@ -103,8 +111,19 @@ function normalizeStoredUser(user: StoredUser | null): StoredUser | null {
 function normalizeBio(bio: BioPageConfig): BioPageConfig {
   const legacyPersonAvatar = 'images.unsplash.com/photo-1507003211169';
   return {
+    ...defaultBio,
     ...bio,
     avatarUrl: bio.avatarUrl?.includes(legacyPersonAvatar) ? '' : bio.avatarUrl ?? '',
+    socialLinks: bio.socialLinks ?? [],
+    links: bio.links ?? [],
+    banners: bio.banners ?? [],
+    backgroundImageUrl: bio.backgroundImageUrl ?? '',
+    backgroundOverlay: bio.backgroundOverlay ?? defaultBio.backgroundOverlay,
+    isPublic: bio.isPublic ?? true,
+    viewsCount: bio.viewsCount ?? 0,
+    interactionsCount: bio.interactionsCount ?? 0,
+    qrColor: bio.qrColor ?? defaultBio.qrColor,
+    qrLogoEnabled: bio.qrLogoEnabled ?? false,
   };
 }
 

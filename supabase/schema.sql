@@ -75,6 +75,7 @@ create table if not exists public.bio_pages (
   display_name text not null,
   bio text,
   avatar_url text,
+  avatar_path text,
   whatsapp text,
   email text,
   category text,
@@ -86,6 +87,9 @@ create table if not exists public.bio_pages (
   background_value text not null default '#000000',
   social_links jsonb not null default '[]'::jsonb,
   font text default 'Inter',
+  background_image_url text,
+  background_image_path text,
+  background_overlay text,
   is_public boolean not null default true,
   views_count integer not null default 0,
   created_at timestamptz not null default now(),
@@ -96,6 +100,10 @@ alter table public.bio_pages add column if not exists category text;
 alter table public.bio_pages add column if not exists country text;
 alter table public.bio_pages add column if not exists social_links jsonb not null default '[]'::jsonb;
 alter table public.bio_pages add column if not exists font text default 'Inter';
+alter table public.bio_pages add column if not exists avatar_path text;
+alter table public.bio_pages add column if not exists background_image_url text;
+alter table public.bio_pages add column if not exists background_image_path text;
+alter table public.bio_pages add column if not exists background_overlay text;
 alter table public.bio_pages alter column button_style set default 'gradient';
 
 create table if not exists public.bio_links (
@@ -104,6 +112,36 @@ create table if not exists public.bio_links (
   title text not null,
   url text not null,
   description text,
+  icon text,
+  position integer not null default 0,
+  is_active boolean not null default true,
+  clicks_count integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.bio_banners (
+  id uuid primary key default gen_random_uuid(),
+  bio_page_id uuid not null references public.bio_pages(id) on delete cascade,
+  title text not null,
+  description text,
+  image_url text,
+  image_path text,
+  destination_url text,
+  aspect_ratio text not null default 'original',
+  position integer not null default 0,
+  is_active boolean not null default true,
+  clicks_count integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.social_links (
+  id uuid primary key default gen_random_uuid(),
+  bio_page_id uuid not null references public.bio_pages(id) on delete cascade,
+  platform text not null,
+  label text,
+  url text not null,
   icon text,
   position integer not null default 0,
   is_active boolean not null default true,
@@ -193,6 +231,12 @@ create index if not exists bio_pages_username_idx on public.bio_pages(lower(user
 create index if not exists bio_pages_public_username_idx on public.bio_pages(lower(username)) where is_public = true;
 create index if not exists bio_links_page_id_idx on public.bio_links(bio_page_id);
 create index if not exists bio_links_page_position_idx on public.bio_links(bio_page_id, position);
+create index if not exists bio_banners_page_id_idx on public.bio_banners(bio_page_id);
+create index if not exists bio_banners_page_position_idx on public.bio_banners(bio_page_id, position);
+create index if not exists bio_banners_active_idx on public.bio_banners(is_active);
+create index if not exists social_links_page_id_idx on public.social_links(bio_page_id);
+create index if not exists social_links_page_position_idx on public.social_links(bio_page_id, position);
+create index if not exists social_links_active_idx on public.social_links(is_active);
 create index if not exists qr_codes_user_id_idx on public.qr_codes(user_id);
 create index if not exists analytics_events_user_id_idx on public.analytics_events(user_id);
 create index if not exists analytics_events_entity_idx on public.analytics_events(entity_type, entity_id);
@@ -243,6 +287,21 @@ begin
   if not exists (select 1 from pg_constraint where conname = 'bio_links_position_nonnegative') then
     alter table public.bio_links add constraint bio_links_position_nonnegative check (position >= 0);
   end if;
+  if not exists (select 1 from pg_constraint where conname = 'bio_banners_aspect_ratio_check') then
+    alter table public.bio_banners add constraint bio_banners_aspect_ratio_check check (aspect_ratio in ('original', '1:1', '3:2', '16:9'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'bio_banners_clicks_nonnegative') then
+    alter table public.bio_banners add constraint bio_banners_clicks_nonnegative check (clicks_count >= 0);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'bio_banners_position_nonnegative') then
+    alter table public.bio_banners add constraint bio_banners_position_nonnegative check (position >= 0);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'social_links_clicks_nonnegative') then
+    alter table public.social_links add constraint social_links_clicks_nonnegative check (clicks_count >= 0);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'social_links_position_nonnegative') then
+    alter table public.social_links add constraint social_links_position_nonnegative check (position >= 0);
+  end if;
   if not exists (select 1 from pg_constraint where conname = 'qr_codes_entity_type_check') then
     alter table public.qr_codes add constraint qr_codes_entity_type_check check (entity_type in ('short_link', 'bio_page', 'custom'));
   end if;
@@ -273,6 +332,11 @@ alter table public.payments drop constraint if exists payments_status_check;
 alter table public.payments
   add constraint payments_status_check
   check (status in ('pending', 'approved', 'completed', 'failed', 'cancelled', 'refunded'));
+
+alter table public.analytics_events drop constraint if exists analytics_events_entity_type_check;
+alter table public.analytics_events
+  add constraint analytics_events_entity_type_check
+  check (entity_type in ('short_link', 'bio_page', 'bio_link', 'bio_banner', 'social_link', 'qr_code'));
 
 do $$
 begin
@@ -377,6 +441,14 @@ create trigger bio_pages_updated_at before update on public.bio_pages
 
 drop trigger if exists bio_links_updated_at on public.bio_links;
 create trigger bio_links_updated_at before update on public.bio_links
+  for each row execute function public.set_updated_at();
+
+drop trigger if exists bio_banners_updated_at on public.bio_banners;
+create trigger bio_banners_updated_at before update on public.bio_banners
+  for each row execute function public.set_updated_at();
+
+drop trigger if exists social_links_updated_at on public.social_links;
+create trigger social_links_updated_at before update on public.social_links
   for each row execute function public.set_updated_at();
 
 drop trigger if exists qr_codes_updated_at on public.qr_codes;
@@ -583,6 +655,82 @@ begin
 end;
 $$;
 
+create or replace function public.track_bio_banner_click(p_banner_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_banner public.bio_banners%rowtype;
+  v_page public.bio_pages%rowtype;
+begin
+  select * into v_banner
+  from public.bio_banners
+  where id = p_banner_id
+    and is_active = true;
+
+  if not found then
+    return;
+  end if;
+
+  select * into v_page
+  from public.bio_pages
+  where id = v_banner.bio_page_id
+    and is_public = true;
+
+  if not found then
+    return;
+  end if;
+
+  update public.bio_banners
+  set clicks_count = clicks_count + 1,
+      updated_at = now()
+  where id = p_banner_id;
+
+  insert into public.analytics_events (user_id, entity_type, entity_id, event_type, metadata)
+  values (v_page.user_id, 'bio_banner', p_banner_id, 'click', jsonb_build_object('bio_page_id', v_page.id));
+end;
+$$;
+
+create or replace function public.track_social_link_click(p_social_link_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_social public.social_links%rowtype;
+  v_page public.bio_pages%rowtype;
+begin
+  select * into v_social
+  from public.social_links
+  where id = p_social_link_id
+    and is_active = true;
+
+  if not found then
+    return;
+  end if;
+
+  select * into v_page
+  from public.bio_pages
+  where id = v_social.bio_page_id
+    and is_public = true;
+
+  if not found then
+    return;
+  end if;
+
+  update public.social_links
+  set clicks_count = clicks_count + 1,
+      updated_at = now()
+  where id = p_social_link_id;
+
+  insert into public.analytics_events (user_id, entity_type, entity_id, event_type, metadata)
+  values (v_page.user_id, 'social_link', p_social_link_id, 'click', jsonb_build_object('bio_page_id', v_page.id, 'platform', v_social.platform));
+end;
+$$;
+
 create or replace function public.track_qr_code_scan(p_qr_id uuid)
 returns void
 language plpgsql
@@ -613,6 +761,8 @@ $$;
 grant execute on function public.resolve_short_link_redirect(text, text, text) to anon, authenticated;
 grant execute on function public.track_bio_page_view(text) to anon, authenticated;
 grant execute on function public.track_bio_link_click(uuid) to anon, authenticated;
+grant execute on function public.track_bio_banner_click(uuid) to anon, authenticated;
+grant execute on function public.track_social_link_click(uuid) to anon, authenticated;
 grant execute on function public.track_qr_code_scan(uuid) to anon, authenticated;
 
 -- Row Level Security
@@ -620,6 +770,8 @@ alter table public.profiles enable row level security;
 alter table public.short_links enable row level security;
 alter table public.bio_pages enable row level security;
 alter table public.bio_links enable row level security;
+alter table public.bio_banners enable row level security;
+alter table public.social_links enable row level security;
 alter table public.qr_codes enable row level security;
 alter table public.analytics_events enable row level security;
 alter table public.payments enable row level security;
@@ -711,6 +863,68 @@ create policy "bio_links_select_public"
     )
   );
 
+drop policy if exists "bio_banners_manage_own" on public.bio_banners;
+drop policy if exists "bio_banners_select_public" on public.bio_banners;
+
+create policy "bio_banners_manage_own"
+  on public.bio_banners for all to authenticated
+  using (
+    exists (
+      select 1 from public.bio_pages bp
+      where bp.id = bio_page_id
+        and bp.user_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.bio_pages bp
+      where bp.id = bio_page_id
+        and bp.user_id = auth.uid()
+    )
+  );
+
+create policy "bio_banners_select_public"
+  on public.bio_banners for select to anon, authenticated
+  using (
+    is_active = true
+    and exists (
+      select 1 from public.bio_pages bp
+      where bp.id = bio_page_id
+        and bp.is_public = true
+    )
+  );
+
+drop policy if exists "social_links_manage_own" on public.social_links;
+drop policy if exists "social_links_select_public" on public.social_links;
+
+create policy "social_links_manage_own"
+  on public.social_links for all to authenticated
+  using (
+    exists (
+      select 1 from public.bio_pages bp
+      where bp.id = bio_page_id
+        and bp.user_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.bio_pages bp
+      where bp.id = bio_page_id
+        and bp.user_id = auth.uid()
+    )
+  );
+
+create policy "social_links_select_public"
+  on public.social_links for select to anon, authenticated
+  using (
+    is_active = true
+    and exists (
+      select 1 from public.bio_pages bp
+      where bp.id = bio_page_id
+        and bp.is_public = true
+    )
+  );
+
 drop policy if exists "qr_codes_select_own" on public.qr_codes;
 drop policy if exists "qr_codes_insert_own" on public.qr_codes;
 drop policy if exists "qr_codes_update_own" on public.qr_codes;
@@ -734,7 +948,7 @@ create policy "analytics_select_own"
 create policy "analytics_insert_controlled"
   on public.analytics_events for insert to anon, authenticated
   with check (
-    entity_type in ('short_link', 'bio_page', 'bio_link', 'qr_code')
+    entity_type in ('short_link', 'bio_page', 'bio_link', 'bio_banner', 'social_link', 'qr_code')
     and event_type in ('view', 'click', 'scan')
     and (user_id is null or auth.uid() = user_id)
   );
@@ -770,7 +984,41 @@ create policy "Users can read their own subscriptions"
   on public.subscriptions for select to authenticated
   using (auth.uid() = user_id);
 
--- Optional storage setup for uploaded avatars:
--- insert into storage.buckets (id, name, public)
--- values ('avatars', 'avatars', true)
--- on conflict (id) do update set public = true;
+-- Storage setup for Bio images.
+insert into storage.buckets (id, name, public)
+values ('bio-assets', 'bio-assets', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists "bio_assets_public_read" on storage.objects;
+drop policy if exists "bio_assets_insert_own" on storage.objects;
+drop policy if exists "bio_assets_update_own" on storage.objects;
+drop policy if exists "bio_assets_delete_own" on storage.objects;
+
+create policy "bio_assets_public_read"
+  on storage.objects for select to anon, authenticated
+  using (bucket_id = 'bio-assets');
+
+create policy "bio_assets_insert_own"
+  on storage.objects for insert to authenticated
+  with check (
+    bucket_id = 'bio-assets'
+    and auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+create policy "bio_assets_update_own"
+  on storage.objects for update to authenticated
+  using (
+    bucket_id = 'bio-assets'
+    and auth.uid()::text = (storage.foldername(name))[1]
+  )
+  with check (
+    bucket_id = 'bio-assets'
+    and auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+create policy "bio_assets_delete_own"
+  on storage.objects for delete to authenticated
+  using (
+    bucket_id = 'bio-assets'
+    and auth.uid()::text = (storage.foldername(name))[1]
+  );

@@ -92,6 +92,7 @@ function AppRoutes() {
         <Route path="qr" element={<QRPage />} />
         <Route path="settings" element={<SettingsView />} />
       </Route>
+      <Route path="/m/:username" element={<PublicBioPage />} />
       <Route path="/u/:username" element={<PublicBioPage />} />
       <Route path="/legal/*" element={<LegalPage />} />
       <Route path="/:slug" element={<ShortLinkResolver />} />

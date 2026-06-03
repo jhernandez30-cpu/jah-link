@@ -3,7 +3,7 @@
  * Sin VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY usa localStorage solo en desarrollo local (modo demo).
  */
 
-import type { BioLink, BioPageConfig, ShortLink } from '../types';
+import type { BioBanner, BioLink, BioPageConfig, ShortLink, SocialLink } from '../types';
 import { DEMO_MODE_MESSAGE, getSupabase, isDemoMode, isSupabaseConfigured } from './supabase';
 import {
   configToBioPagePayload,
@@ -72,7 +72,7 @@ export type PublicShortLink = {
   clicks: number;
 };
 type DbEventType = 'view' | 'click' | 'scan';
-type DbEntityType = 'short_link' | 'bio_page' | 'bio_link' | 'qr_code';
+type DbEntityType = 'short_link' | 'bio_page' | 'bio_link' | 'bio_banner' | 'social_link' | 'qr_code';
 type QrEntityType = 'short_link' | 'bio_page' | 'custom';
 
 function mapDbEventType(eventType: string): DbEventType {
@@ -83,12 +83,27 @@ function mapDbEventType(eventType: string): DbEventType {
 
 function mapLocalEventType(eventType: string, entityType?: string): AnalyticsEvent['type'] {
   if (eventType === 'bio_view' || (eventType === 'view' && entityType === 'bio_page')) return 'bio_view';
-  if (eventType === 'bio_button_click' || entityType === 'bio_link') return 'bio_button_click';
+  if (
+    eventType === 'bio_button_click' ||
+    entityType === 'bio_link' ||
+    entityType === 'bio_banner' ||
+    entityType === 'social_link'
+  ) {
+    return 'bio_button_click';
+  }
   return 'link_click';
 }
 
 function mapDbEntityType(entityType: string): DbEntityType {
-  if (entityType === 'bio_page' || entityType === 'bio_link' || entityType === 'qr_code') return entityType;
+  if (
+    entityType === 'bio_page' ||
+    entityType === 'bio_link' ||
+    entityType === 'bio_banner' ||
+    entityType === 'social_link' ||
+    entityType === 'qr_code'
+  ) {
+    return entityType;
+  }
   return 'short_link';
 }
 
@@ -103,6 +118,7 @@ function bioLinkFromRow(row: {
   url: string;
   icon: string | null;
   is_active: boolean;
+  clicks_count?: number;
 }): BioLink {
   return {
     id: row.id,
@@ -110,6 +126,7 @@ function bioLinkFromRow(row: {
     url: row.url,
     platform: row.icon ?? 'Website',
     active: row.is_active,
+    clicksCount: row.clicks_count ?? 0,
   };
 }
 
@@ -830,6 +847,107 @@ export async function resolveSlugRedirect(slug: string): Promise<RedirectResult 
   };
 }
 
+// ——— Storage Bio Assets ———
+
+export interface UploadedBioAsset {
+  url: string;
+  path?: string;
+}
+
+const BIO_ASSET_BUCKET = 'bio-assets';
+const BIO_ASSET_MAX_BYTES = 5 * 1024 * 1024;
+const BIO_ASSET_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+const BIO_ASSET_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp'];
+
+function assertValidBioImage(file: File): void {
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const typeOk = BIO_ASSET_TYPES.includes(file.type);
+  const extOk = BIO_ASSET_EXTENSIONS.includes(ext);
+  if (!typeOk && !extOk) {
+    throw new StorageError('validation', 'Formato no válido. Usa PNG, JPG, JPEG o WebP.');
+  }
+  if (file.size > BIO_ASSET_MAX_BYTES) {
+    throw new StorageError('validation', 'La imagen debe pesar 5 MB o menos.');
+  }
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new StorageError('storage', 'No se pudo leer la imagen.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function safeAssetName(file: File): string {
+  const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+  const base = file.name
+    .replace(/\.[^.]+$/, '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 42) || 'imagen';
+  return `${Date.now()}-${base}.${ext}`;
+}
+
+async function uploadBioAsset(file: File, userId: string | undefined, folder: 'avatars' | 'banners' | 'backgrounds'): Promise<UploadedBioAsset> {
+  assertValidBioImage(file);
+
+  const sb = getSupabase();
+  if (!sb && isDemoMode()) {
+    return { url: await readFileAsDataUrl(file) };
+  }
+  if (!sb) {
+    throw new StorageError('storage', 'Supabase Storage no está configurado. Configura VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY.');
+  }
+
+  const authUserId = await requireUserId();
+  const ownerId = userId || authUserId;
+  if (ownerId !== authUserId) {
+    throw new StorageError('auth', 'No puedes subir archivos para otro usuario.');
+  }
+
+  const path = `${ownerId}/${folder}/${safeAssetName(file)}`;
+  const { error } = await sb.storage.from(BIO_ASSET_BUCKET).upload(path, file, {
+    upsert: true,
+    cacheControl: '3600',
+    contentType: file.type || undefined,
+  });
+
+  if (error) {
+    throw new StorageError('storage', 'No se pudo subir la imagen. Verifica el bucket público "bio-assets" en Supabase.');
+  }
+
+  const { data } = sb.storage.from(BIO_ASSET_BUCKET).getPublicUrl(path);
+  return { url: data.publicUrl, path };
+}
+
+export function uploadBioAvatar(file: File, userId: string): Promise<UploadedBioAsset> {
+  return uploadBioAsset(file, userId, 'avatars');
+}
+
+export function uploadBioBannerImage(file: File, userId: string): Promise<UploadedBioAsset> {
+  return uploadBioAsset(file, userId, 'banners');
+}
+
+export function uploadBioBackgroundImage(file: File, userId: string): Promise<UploadedBioAsset> {
+  return uploadBioAsset(file, userId, 'backgrounds');
+}
+
+export async function deleteBioAsset(path: string): Promise<void> {
+  if (!path) return;
+  const sb = getSupabase();
+  if (!sb && isDemoMode()) return;
+  if (!sb) throw new StorageError('storage', 'Supabase Storage no está configurado.');
+
+  await requireUserId();
+  const { error } = await sb.storage.from(BIO_ASSET_BUCKET).remove([path]);
+  if (error) throw new StorageError('storage', 'No se pudo eliminar la imagen en Storage.');
+}
+
 // ——— Bio ———
 
 export async function getBioPage(): Promise<BioPageWithId> {
@@ -846,19 +964,25 @@ export async function getBioPage(): Promise<BioPageWithId> {
   if (error) throw new StorageError('load', 'No se pudo cargar la información.');
   if (!page) return { ...defaultBio, bioPageId: undefined };
 
-  const { data: links } = await sb
-    .from('bio_links')
-    .select('*')
-    .eq('bio_page_id', page.id)
-    .order('position');
+  const [linksResult, bannersResult, socialsResult] = await Promise.all([
+    sb.from('bio_links').select('*').eq('bio_page_id', page.id).order('position'),
+    sb.from('bio_banners').select('*').eq('bio_page_id', page.id).order('position'),
+    sb.from('social_links').select('*').eq('bio_page_id', page.id).order('position'),
+  ]);
 
-  return rowsToBioPageConfig(page, links ?? []);
+  return rowsToBioPageConfig(
+    page,
+    linksResult.data ?? [],
+    bannersResult.error ? [] : bannersResult.data ?? [],
+    socialsResult.error ? [] : socialsResult.data ?? [],
+  );
 }
 
 export async function getPublicBioPageByUsername(username: string): Promise<BioPageWithId | null> {
   if (isDemoMode()) {
     const bio = localStore.loadBio();
     if (bio.username.toLowerCase() !== username.toLowerCase()) return null;
+    if (bio.isPublic === false) return null;
     return { ...bio, bioPageId: undefined };
   }
   if (!isSupabaseConfigured()) return null;
@@ -873,20 +997,34 @@ export async function getPublicBioPageByUsername(username: string): Promise<BioP
 
   if (error || !page) return null;
 
-  const { data: links } = await sb
-    .from('bio_links')
-    .select('*')
-    .eq('bio_page_id', page.id)
-    .eq('is_active', true)
-    .order('position');
+  const [linksResult, bannersResult, socialsResult] = await Promise.all([
+    sb.from('bio_links').select('*').eq('bio_page_id', page.id).eq('is_active', true).order('position'),
+    sb.from('bio_banners').select('*').eq('bio_page_id', page.id).eq('is_active', true).order('position'),
+    sb.from('social_links').select('*').eq('bio_page_id', page.id).eq('is_active', true).order('position'),
+  ]);
 
-  return rowsToBioPageConfig(page, links ?? []);
+  return rowsToBioPageConfig(
+    page,
+    linksResult.data ?? [],
+    bannersResult.error ? [] : bannersResult.data ?? [],
+    socialsResult.error ? [] : socialsResult.data ?? [],
+  );
 }
 
 export async function upsertBioPage(config: BioPageConfig): Promise<BioPageWithId> {
   if (isDemoMode()) {
-    localStore.saveBio(config);
-    return { ...config, bioPageId: undefined };
+    const now = new Date().toISOString();
+    const existing = localStore.loadBio();
+    const next = {
+      ...config,
+      createdAt: config.createdAt ?? existing.createdAt ?? now,
+      updatedAt: now,
+      isPublic: config.isPublic !== false,
+      viewsCount: config.viewsCount ?? existing.viewsCount ?? 0,
+      interactionsCount: config.interactionsCount ?? existing.interactionsCount ?? 0,
+    };
+    localStore.saveBio(next);
+    return { ...next, bioPageId: undefined };
   }
 
   const userId = await requireUserId();
@@ -925,7 +1063,7 @@ export async function upsertBioPage(config: BioPageConfig): Promise<BioPageWithI
 
   await sb.from('bio_links').delete().eq('bio_page_id', pageId);
 
-  if (config.links.length > 0) {
+  if ((config.links ?? []).length > 0) {
     const rows = config.links.map((link, i) => ({
       bio_page_id: pageId,
       title: link.label,
@@ -936,6 +1074,50 @@ export async function upsertBioPage(config: BioPageConfig): Promise<BioPageWithI
     }));
     const { error: linksError } = await sb.from('bio_links').insert(rows);
     if (linksError) throw new StorageError('save', 'No se pudieron guardar los botones.');
+  }
+
+  const { error: deleteBannersError } = await sb.from('bio_banners').delete().eq('bio_page_id', pageId);
+  if (deleteBannersError) {
+    throw new StorageError('schema', 'No se pudieron guardar los banners. Ejecuta supabase/schema.sql completo.');
+  }
+
+  if ((config.banners ?? []).length > 0) {
+    const rows = config.banners.map((banner, i) => ({
+      bio_page_id: pageId,
+      title: banner.title,
+      description: banner.description || null,
+      image_url: banner.imageUrl || null,
+      image_path: banner.imagePath || null,
+      destination_url: banner.destinationUrl || null,
+      aspect_ratio: banner.aspectRatio,
+      position: i,
+      is_active: banner.active !== false,
+    }));
+    const { error: bannersError } = await sb.from('bio_banners').insert(rows);
+    if (bannersError) {
+      throw new StorageError('save', 'No se pudieron guardar los banners de marca.');
+    }
+  }
+
+  const { error: deleteSocialsError } = await sb.from('social_links').delete().eq('bio_page_id', pageId);
+  if (deleteSocialsError) {
+    throw new StorageError('schema', 'No se pudieron guardar las redes sociales. Ejecuta supabase/schema.sql completo.');
+  }
+
+  if ((config.socialLinks ?? []).length > 0) {
+    const rows = config.socialLinks.map((social, i) => ({
+      bio_page_id: pageId,
+      platform: social.platform,
+      label: social.label || social.platform,
+      url: social.url,
+      icon: social.icon || social.platform,
+      position: i,
+      is_active: social.active !== false,
+    }));
+    const { error: socialsError } = await sb.from('social_links').insert(rows);
+    if (socialsError) {
+      throw new StorageError('save', 'No se pudieron guardar las redes sociales.');
+    }
   }
 
   return getBioPage();
@@ -1079,6 +1261,10 @@ export async function reorderBioLinks(orderedIds: string[]): Promise<void> {
 
 export async function incrementBioPageView(username: string): Promise<void> {
   if (isDemoMode()) {
+    const bio = localStore.loadBio();
+    if (bio.username.toLowerCase() === username.toLowerCase()) {
+      localStore.saveBio({ ...bio, viewsCount: (bio.viewsCount ?? 0) + 1 });
+    }
     localStore.pushAnalytics({ type: 'bio_view', label: username });
     return;
   }
@@ -1088,11 +1274,53 @@ export async function incrementBioPageView(username: string): Promise<void> {
 
 export async function incrementBioLinkClick(linkId: string): Promise<void> {
   if (isDemoMode()) {
+    const bio = localStore.loadBio();
+    localStore.saveBio({
+      ...bio,
+      links: bio.links.map((link) =>
+        link.id === linkId ? { ...link, clicksCount: (link.clicksCount ?? 0) + 1 } : link,
+      ),
+      interactionsCount: (bio.interactionsCount ?? 0) + 1,
+    });
     localStore.pushAnalytics({ type: 'bio_button_click', label: linkId });
     return;
   }
   const sb = getSupabase()!;
   await sb.rpc('track_bio_link_click', { p_link_id: linkId });
+}
+
+export async function incrementBioBannerClick(bannerId: string): Promise<void> {
+  if (isDemoMode()) {
+    const bio = localStore.loadBio();
+    localStore.saveBio({
+      ...bio,
+      banners: bio.banners.map((banner) =>
+        banner.id === bannerId ? { ...banner, clicksCount: (banner.clicksCount ?? 0) + 1 } : banner,
+      ),
+      interactionsCount: (bio.interactionsCount ?? 0) + 1,
+    });
+    localStore.pushAnalytics({ type: 'bio_button_click', label: `banner:${bannerId}` });
+    return;
+  }
+  const sb = getSupabase()!;
+  await sb.rpc('track_bio_banner_click', { p_banner_id: bannerId });
+}
+
+export async function incrementSocialLinkClick(socialLinkId: string): Promise<void> {
+  if (isDemoMode()) {
+    const bio = localStore.loadBio();
+    localStore.saveBio({
+      ...bio,
+      socialLinks: bio.socialLinks.map((social) =>
+        social.id === socialLinkId ? { ...social, clicksCount: (social.clicksCount ?? 0) + 1 } : social,
+      ),
+      interactionsCount: (bio.interactionsCount ?? 0) + 1,
+    });
+    localStore.pushAnalytics({ type: 'bio_button_click', label: `social:${socialLinkId}` });
+    return;
+  }
+  const sb = getSupabase()!;
+  await sb.rpc('track_social_link_click', { p_social_link_id: socialLinkId });
 }
 
 // ——— QR ———

@@ -15,6 +15,7 @@ Este proyecto usa **Vite + React**, no Next.js. Por eso las variables publicas c
 ```env
 VITE_SUPABASE_URL=your_supabase_project_url
 VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+VITE_PUBLIC_BASE_URL=https://jah-link.vercel.app
 VITE_PAYPAL_CLIENT_ID=your_paypal_client_id
 VITE_PAYPAL_CURRENCY=USD
 ```
@@ -37,6 +38,7 @@ No uses `NEXT_PUBLIC_SUPABASE_URL` ni `NEXT_PUBLIC_SUPABASE_ANON_KEY` en esta ap
    ```env
    VITE_SUPABASE_URL=https://tu-proyecto.supabase.co
    VITE_SUPABASE_ANON_KEY=tu_anon_key
+   VITE_PUBLIC_BASE_URL=https://jah-link.vercel.app
    VITE_PAYPAL_CLIENT_ID=tu_paypal_client_id
    VITE_PAYPAL_CURRENCY=USD
    ```
@@ -78,7 +80,7 @@ Vite es un bundler que necesita su propio servidor de desarrollo para procesar l
 2. En **SQL Editor**, ejecuta el archivo completo:
    `supabase/schema.sql`
 3. En **Authentication → Providers**, habilita Email.
-4. (Opcional) **Storage** → crea un bucket público llamado `avatars` para fotos de perfil/bio.
+4. **Storage** queda preparado por `supabase/schema.sql` con el bucket público `bio-assets` para avatar, banners y fondo de Página Bio.
 5. Copia la **Project URL** y **anon public key** a tu archivo de configuración de entorno.
 
 ### Vercel + Supabase
@@ -94,6 +96,7 @@ Pasos para producción:
    ```env
    VITE_SUPABASE_URL=your_supabase_project_url
    VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+   VITE_PUBLIC_BASE_URL=https://jah-link.vercel.app
    VITE_PAYPAL_CLIENT_ID=your_paypal_client_id
    VITE_PAYPAL_CURRENCY=USD
    ```
@@ -111,12 +114,64 @@ vercel env pull .env.local
 
 En Vite puedes usar `.env.local` para desarrollo local. No subas `.env` ni `.env.local` al repositorio.
 
+## Página Bio
+
+La Página Bio se administra desde `/dashboard/bio` y publica el perfil en:
+
+```text
+PUBLIC_BASE_URL/m/:username
+```
+
+Ejemplo temporal:
+
+```text
+https://jah-link.vercel.app/m/abraham
+```
+
+Cuando el dominio `jah.link` esté listo, cambia en Vercel:
+
+```env
+VITE_PUBLIC_BASE_URL=https://jah.link
+```
+
+Flujo:
+
+1. Entra a `/dashboard/bio`.
+2. Presiona **Crear página**.
+3. Configura username, nombre público, bio, redes sociales, banners, tema y QR.
+4. Sube imágenes desde celular o computadora; el bucket usado es `bio-assets`.
+5. Guarda la página.
+6. El panel vuelve al listado **JAH Link Pages** y muestra tarjeta, link público, visitas, interacciones y acciones.
+
+Tablas usadas:
+
+- `bio_pages`
+- `bio_links`
+- `bio_banners`
+- `social_links`
+- `qr_codes`
+- `analytics_events`
+
+Límites por plan:
+
+- Gratis: 1 Página Bio, 2 banners, QR básico, fondo con imagen bloqueado y branding JAH Link visible.
+- Pro: hasta 4 banners, imagen de fondo, QR con logo y personalización avanzada.
+- Business: hasta 4 banners o más según lógica empresarial futura, imagen de fondo, QR con logo y marca blanca si aplica.
+
+Para probar en Vercel:
+
+1. Ejecuta `supabase/schema.sql` completo en Supabase SQL Editor.
+2. Configura `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` y `VITE_PUBLIC_BASE_URL` en Vercel.
+3. Haz **Redeploy**.
+4. Verifica registro, login, creación de Página Bio, `/m/:username`, avatar, banners, redes, QR y analítica.
+
 ## Redirección de enlaces cortos
 
 JAH Link resuelve enlaces públicos con estas rutas:
 
 - `/:slug` resuelve enlaces cortos.
-- `/u/:username` resuelve páginas bio públicas.
+- `/m/:username` resuelve páginas bio públicas.
+- `/u/:username` se mantiene como alias compatible de Página Bio.
 - `/legal/*` resuelve páginas legales.
 - `/dashboard/*` queda protegido y no debe ser tomado como slug.
 
@@ -203,6 +258,7 @@ Si las tablas `payments` o `subscriptions` todavía no existen, ejecuta `supabas
    ```env
    VITE_SUPABASE_URL=your_supabase_project_url
    VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+   VITE_PUBLIC_BASE_URL=https://jah-link.vercel.app
    VITE_PAYPAL_CLIENT_ID=your_paypal_client_id
    VITE_PAYPAL_CURRENCY=USD
    PAYPAL_CLIENT_ID=your_paypal_client_id
@@ -295,11 +351,12 @@ Si las tablas `payments` o `subscriptions` todavía no existen, ejecuta `supabas
 | `/api/paypal/webhook` | Webhook PayPal con verificación de firma |
 | `/dashboard` | Panel (protegido) |
 | `/dashboard/links` | Enlaces cortos |
-| `/dashboard/bio` | Editor página bio |
+| `/dashboard/bio` | Listado y editor de Página Bio |
 | `/dashboard/analytics` | Analítica |
 | `/dashboard/qr` | Códigos QR |
 | `/dashboard/settings` | Configuración |
-| `/u/:username` | Bio pública |
+| `/m/:username` | Página Bio pública |
+| `/u/:username` | Alias compatible de Bio pública |
 | `/:slug` | Redirección + tracking |
 
 ## Capa de datos
@@ -333,8 +390,9 @@ Si las tablas `payments` o `subscriptions` todavía no existen, ejecuta `supabas
 
 ### 3. Página bio
 
-1. `/dashboard/bio` → edita perfil y botones → guardar.
-2. Visita `/u/tu-username` → vista pública y registro de visita.
+1. `/dashboard/bio` → crea o edita perfil, redes, banners, QR y diseño → guardar.
+2. Verifica el listado **JAH Link Pages** con la tarjeta creada.
+3. Visita `/m/tu-username` → vista pública, redes, banners y registro de visita.
 
 ### 4. Analítica
 

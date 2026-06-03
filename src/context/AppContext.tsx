@@ -17,8 +17,10 @@ import {
   getPublicBioPageByUsername,
   getQrCodes,
   getShortLinks,
+  incrementBioBannerClick,
   incrementBioLinkClick,
   incrementBioPageView,
+  incrementSocialLinkClick,
   isDemoMode,
   isSupabaseConfigured,
   resolveSlugRedirect,
@@ -30,6 +32,10 @@ import {
   updateShortLink,
   updateProfile,
   uploadAvatar,
+  uploadBioAvatar as uploadBioAvatarAsset,
+  uploadBioBackgroundImage as uploadBioBackgroundImageAsset,
+  uploadBioBannerImage as uploadBioBannerImageAsset,
+  deleteBioAsset as deleteBioAssetFile,
   createQrCode,
   createPendingPayment,
   deleteQrCode,
@@ -44,6 +50,7 @@ import {
   type PendingPayment,
   type PlanPayment,
   type RedirectResult,
+  type UploadedBioAsset,
 } from '../lib/storage';
 import {
   canCreateShortLink,
@@ -87,6 +94,10 @@ interface AppContextValue {
   updateUserProfile: (patch: Partial<StoredUser>) => Promise<boolean>;
   createPlanPaymentIntent: (plan: PaidPlanId) => Promise<PendingPayment | null>;
   uploadUserAvatar: (file: File) => Promise<string | null>;
+  uploadBioAvatar: (file: File) => Promise<UploadedBioAsset | null>;
+  uploadBioBannerImage: (file: File) => Promise<UploadedBioAsset | null>;
+  uploadBioBackgroundImage: (file: File) => Promise<UploadedBioAsset | null>;
+  deleteBioAsset: (path: string) => Promise<boolean>;
   addLink: (input: Omit<ShortLink, 'id' | 'clicks' | 'createdAt'>) => Promise<ShortLink | null>;
   updateLink: (id: string, patch: Partial<ShortLink>) => Promise<void>;
   deleteLink: (id: string) => Promise<void>;
@@ -95,6 +106,8 @@ interface AppContextValue {
   loadPublicBio: (username: string) => Promise<BioPageConfig | null>;
   recordBioView: (username: string) => Promise<void>;
   recordBioLinkClick: (linkId: string) => Promise<void>;
+  recordBioBannerClick: (bannerId: string) => Promise<void>;
+  recordSocialLinkClick: (socialLinkId: string) => Promise<void>;
   analyticsEvents: AnalyticsEvent[];
   createQr: (input: { entityType: string; entityId?: string; targetUrl: string; title?: string }) => Promise<void>;
   deleteQr: (id: string) => Promise<void>;
@@ -128,11 +141,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     category: '',
     socialLinks: [],
     links: [],
+    banners: [],
     theme: 'Modern',
     backgroundColor: '#000000',
     primaryColor: '#006BFF',
     buttonStyle: 'rounded',
     font: 'Inter',
+    backgroundImageUrl: '',
+    backgroundOverlay: 'rgba(0,0,0,0.35)',
+    isPublic: true,
+    viewsCount: 0,
+    interactionsCount: 0,
+    qrColor: '#00CFFF',
+    qrLogoEnabled: false,
   });
   const [bioPageId, setBioPageId] = useState<string | undefined>();
   const [user, setUser] = useState<StoredUser | null>(null);
@@ -313,6 +334,49 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [clearMessages]);
 
+  const bioOwnerId = useCallback(() => user?.id ?? 'demo-user', [user?.id]);
+
+  const uploadBioAvatar = useCallback(async (file: File) => {
+    clearMessages();
+    try {
+      return await uploadBioAvatarAsset(file, bioOwnerId());
+    } catch (e) {
+      setError(mapStorageError(e));
+      return null;
+    }
+  }, [bioOwnerId, clearMessages]);
+
+  const uploadBioBannerImage = useCallback(async (file: File) => {
+    clearMessages();
+    try {
+      return await uploadBioBannerImageAsset(file, bioOwnerId());
+    } catch (e) {
+      setError(mapStorageError(e));
+      return null;
+    }
+  }, [bioOwnerId, clearMessages]);
+
+  const uploadBioBackgroundImage = useCallback(async (file: File) => {
+    clearMessages();
+    try {
+      return await uploadBioBackgroundImageAsset(file, bioOwnerId());
+    } catch (e) {
+      setError(mapStorageError(e));
+      return null;
+    }
+  }, [bioOwnerId, clearMessages]);
+
+  const deleteBioAsset = useCallback(async (path: string) => {
+    clearMessages();
+    try {
+      await deleteBioAssetFile(path);
+      return true;
+    } catch (e) {
+      setError(mapStorageError(e));
+      return false;
+    }
+  }, [clearMessages]);
+
   const logout = useCallback(async () => {
     await signOut();
     setIsAuthenticated(false);
@@ -436,7 +500,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const { bioPageId: pid, ...rest } = saved;
       setBioConfig(rest);
       setBioPageId(pid);
-      setSuccessMessage('Cambios guardados correctamente.');
+      setSuccessMessage('Página guardada correctamente.');
       return true;
     } catch (e) {
       setError(mapStorageError(e));
@@ -459,6 +523,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const recordBioLinkClick = useCallback(async (linkId: string) => {
     await incrementBioLinkClick(linkId);
+  }, []);
+
+  const recordBioBannerClick = useCallback(async (bannerId: string) => {
+    await incrementBioBannerClick(bannerId);
+  }, []);
+
+  const recordSocialLinkClick = useCallback(async (socialLinkId: string) => {
+    await incrementSocialLinkClick(socialLinkId);
   }, []);
 
   const createQr = useCallback(
@@ -517,6 +589,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateUserProfile,
       createPlanPaymentIntent,
       uploadUserAvatar,
+      uploadBioAvatar,
+      uploadBioBannerImage,
+      uploadBioBackgroundImage,
+      deleteBioAsset,
       addLink,
       updateLink,
       deleteLink,
@@ -525,6 +601,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       loadPublicBio,
       recordBioView,
       recordBioLinkClick,
+      recordBioBannerClick,
+      recordSocialLinkClick,
       analyticsEvents,
       createQr,
       deleteQr,
@@ -553,6 +631,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateUserProfile,
       createPlanPaymentIntent,
       uploadUserAvatar,
+      uploadBioAvatar,
+      uploadBioBannerImage,
+      uploadBioBackgroundImage,
+      deleteBioAsset,
       addLink,
       updateLink,
       deleteLink,
@@ -561,6 +643,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       loadPublicBio,
       recordBioView,
       recordBioLinkClick,
+      recordBioBannerClick,
+      recordSocialLinkClick,
       analyticsEvents,
       createQr,
       deleteQr,

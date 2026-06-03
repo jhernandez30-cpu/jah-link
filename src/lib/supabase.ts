@@ -128,6 +128,7 @@ export type Database = {
           display_name: string;
           bio: string | null;
           avatar_url: string | null;
+          avatar_path: string | null;
           whatsapp: string | null;
           email: string | null;
           category: string | null;
@@ -139,6 +140,9 @@ export type Database = {
           background_value: string;
           social_links: unknown;
           font: string | null;
+          background_image_url: string | null;
+          background_image_path: string | null;
+          background_overlay: string | null;
           is_public: boolean;
           views_count: number;
           created_at: string;
@@ -152,6 +156,38 @@ export type Database = {
           title: string;
           url: string;
           description: string | null;
+          icon: string | null;
+          position: number;
+          is_active: boolean;
+          clicks_count: number;
+          created_at: string;
+          updated_at: string;
+        };
+      };
+      bio_banners: {
+        Row: {
+          id: string;
+          bio_page_id: string;
+          title: string;
+          description: string | null;
+          image_url: string | null;
+          image_path: string | null;
+          destination_url: string | null;
+          aspect_ratio: 'original' | '1:1' | '3:2' | '16:9';
+          position: number;
+          is_active: boolean;
+          clicks_count: number;
+          created_at: string;
+          updated_at: string;
+        };
+      };
+      social_links: {
+        Row: {
+          id: string;
+          bio_page_id: string;
+          platform: string;
+          label: string | null;
+          url: string;
           icon: string | null;
           position: number;
           is_active: boolean;
@@ -177,7 +213,7 @@ export type Database = {
         Row: {
           id: string;
           user_id: string | null;
-          entity_type: 'short_link' | 'bio_page' | 'bio_link' | 'qr_code';
+          entity_type: 'short_link' | 'bio_page' | 'bio_link' | 'bio_banner' | 'social_link' | 'qr_code';
           entity_id: string | null;
           event_type: 'view' | 'click' | 'scan';
           referrer: string | null;
@@ -237,6 +273,14 @@ export type Database = {
       };
       track_bio_link_click: {
         Args: { p_link_id: string };
+        Returns: undefined;
+      };
+      track_bio_banner_click: {
+        Args: { p_banner_id: string };
+        Returns: undefined;
+      };
+      track_social_link_click: {
+        Args: { p_social_link_id: string };
         Returns: undefined;
       };
       track_qr_code_scan: {
