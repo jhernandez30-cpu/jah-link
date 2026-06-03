@@ -128,6 +128,16 @@ Ejemplo temporal:
 https://jah-link.vercel.app/m/abraham
 ```
 
+Estado actual del dominio personalizado:
+
+- `jah.link` no debe usarse como `VITE_PUBLIC_BASE_URL` hasta que Vercel marque el dominio como válido y el DNS resuelva correctamente.
+- Si `jah.link` no resuelve, los botones **Ver página** y **Copiar link** deben seguir usando `https://jah-link.vercel.app/m/:username`.
+- El diagnóstico local del 2026-06-03 devolvió error DNS para `jah.link`, por lo que el valor funcional temporal es:
+
+```env
+VITE_PUBLIC_BASE_URL=https://jah-link.vercel.app
+```
+
 Cuando el dominio `jah.link` esté listo, cambia en Vercel:
 
 ```env
@@ -172,6 +182,41 @@ Para probar en Vercel:
 2. Configura `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` y `VITE_PUBLIC_BASE_URL` en Vercel.
 3. Haz **Redeploy**.
 4. Verifica registro, login, creación de Página Bio, `/m/:username`, avatar, banners, redes, QR y analítica.
+
+Autosave y recuperación:
+
+- El editor guarda un borrador local automáticamente después de cambios.
+- También guarda antes de ocultar la pestaña, refrescar o salir.
+- Si existe un borrador más reciente que la versión guardada, muestra: `Encontramos cambios no guardados. ¿Quieres restaurarlos?`
+- Al guardar correctamente en Supabase, el borrador local se limpia.
+- Si Supabase falla, el borrador se conserva para no perder el trabajo del usuario.
+
+## Configuración DNS de jah.link
+
+El código no puede corregir DNS si el dominio no está validado en Vercel. Para activar `jah.link`:
+
+1. Ir a Vercel → **Project Settings** → **Domains**.
+2. Agregar `jah.link`.
+3. Revisar los registros DNS exactos que Vercel muestre para el proyecto.
+4. En el proveedor del dominio configurar, si Vercel lo solicita:
+   ```text
+   A @ 76.76.21.21
+   CNAME www cname.vercel-dns.com
+   ```
+5. Esperar la propagación y validación.
+6. Confirmar que Vercel muestre **Valid Configuration**.
+7. Cambiar en Vercel:
+   ```env
+   VITE_PUBLIC_BASE_URL=https://jah.link
+   ```
+8. Hacer **Redeploy**.
+9. Abrir `https://jah.link/m/abraham` y confirmar que ya no aparece `DNS_PROBE_POSSIBLE`.
+
+Mientras Vercel no muestre **Valid Configuration**, usa:
+
+```env
+VITE_PUBLIC_BASE_URL=https://jah-link.vercel.app
+```
 
 ## Redirección de enlaces cortos
 
@@ -281,7 +326,8 @@ Si las tablas `payments` o `subscriptions` todavía no existen, ejecuta `supabas
    - Build command: `npm run build`
    - Output directory: `dist`
 8. Configurar webhook en PayPal Developer Dashboard:
-   - URL: `https://jah.link/api/paypal/webhook`
+   - URL temporal mientras DNS no esté listo: `https://jah-link.vercel.app/api/paypal/webhook`
+   - URL final después de validar `jah.link`: `https://jah.link/api/paypal/webhook`
    - Eventos: Checkout order approved, Payment capture completed, Payment capture denied, Payment capture refunded, Payment capture reversed
    - Copiar el Webhook ID a `PAYPAL_WEBHOOK_ID`.
 9. Hacer **Redeploy** en Vercel.

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -34,7 +34,14 @@ import {
 } from 'lucide-react';
 import type { BioBanner, BioBannerAspectRatio, BioPageConfig, SocialLink } from '../types';
 import { useApp } from '../context/AppContext';
-import { getPublicBioUrl, PUBLIC_BASE_URL } from '../lib/config';
+import { getCustomDomainAdminWarning, getPublicBioUrl, PUBLIC_BASE_URL } from '../lib/config';
+import {
+  buildBioDraftRecord,
+  clearBioDraft,
+  loadBioDraft,
+  saveBioDraft,
+  type BioDraftRecord,
+} from '../lib/bioDraftStorage';
 import { getPlanDefinition, normalizePlan } from '../lib/plans';
 import { isValidSlug } from '../lib/validation';
 import { isReservedSlug } from '../lib/reservedSlugs';
@@ -238,6 +245,33 @@ function readFilePreview(file: File): Promise<string> {
   });
 }
 
+function isDataUrl(value: string | undefined): value is string {
+  return Boolean(value?.startsWith('data:image/'));
+}
+
+async function dataUrlToFile(dataUrl: string, fileName: string): Promise<File> {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  const extension = blob.type.split('/')[1] || 'png';
+  return new File([blob], `${fileName}.${extension}`, { type: blob.type || 'image/png' });
+}
+
+function getRouteBioId(pathname: string): string | undefined {
+  if (!pathname.includes('/dashboard/bio/edit/')) return undefined;
+  const raw = pathname.split('/dashboard/bio/edit/')[1]?.split('/')[0];
+  return raw ? decodeURIComponent(raw) : undefined;
+}
+
+function savedConfigTime(config: BioPageConfig): number {
+  const value = config.updatedAt || config.createdAt;
+  return value ? new Date(value).getTime() : 0;
+}
+
+function hashBioDraftRecord(record: BioDraftRecord): string {
+  const { updatedAt: _updatedAt, ...rest } = record;
+  return JSON.stringify(rest);
+}
+
 export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioPageBuilderViewProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -273,18 +307,28 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
   const [pendingBackgroundFile, setPendingBackgroundFile] = useState<File | null>(null);
   const [pendingBannerFile, setPendingBannerFile] = useState<File | null>(null);
   const [pendingBannerFiles, setPendingBannerFiles] = useState<Record<string, File>>({});
+  const [draftSaveStatus, setDraftSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'savedAll'>('idle');
+  const [restoreCandidate, setRestoreCandidate] = useState<BioDraftRecord | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const bannerInputRef = useRef<HTMLInputElement>(null);
   const backgroundInputRef = useRef<HTMLInputElement>(null);
   const qrRef = useRef<HTMLDivElement>(null);
+  const autosaveTimerRef = useRef<number | null>(null);
+  const latestDraftRecordRef = useRef<BioDraftRecord | null>(null);
+  const lastAutosaveHashRef = useRef('');
 
   const plan = normalizePlan(user?.plan ?? 'gratis');
   const planDef = getPlanDefinition(plan);
   const isFree = plan === 'gratis';
   const bannerLimit = isFree ? 2 : 4;
   const canUseAdvanced = plan !== 'gratis';
+  const routeBioId = useMemo(() => getRouteBioId(location.pathname), [location.pathname]);
   const hasPage = hasRealBioPage(draft);
+  const draftUserId = user?.id ?? user?.email ?? 'demo-user';
+  const draftStoragePageId = bioPageId ?? draft.bioPageId ?? routeBioId ?? (location.pathname.includes('/dashboard/bio/create') ? 'new' : draft.username || 'new');
+  const customDomainWarning = getCustomDomainAdminWarning();
   const publicUrl = draft.username ? getPublicBioUrl(draft.username) : `${PUBLIC_BASE_URL}/m/usuario`;
   const remainingPages = planDef.limits.bioPages === null ? null : Math.max(0, planDef.limits.bioPages - (hasPage ? 1 : 0));
   const filteredPageVisible = !query.trim() || publicUrl.toLowerCase().includes(query.toLowerCase()) || draft.displayName.toLowerCase().includes(query.toLowerCase());
@@ -308,22 +352,167 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
   const activeBanners = previewBanners.filter((banner) => banner.active !== false);
   const activeSocials = draft.socialLinks.filter((social) => social.active !== false && social.url);
   const activeLinks = draft.links.filter((link) => link.active !== false);
+  const hasLocalDraftImages = isDataUrl(draft.avatarUrl) ||
+    isDataUrl(draft.backgroundImageUrl) ||
+    previewBanners.some((banner) => isDataUrl(banner.imageUrl));
   const interactions =
     draft.interactionsCount ??
     [...draft.links, ...draft.banners, ...draft.socialLinks].reduce((sum, item) => sum + (item.clicksCount ?? 0), 0);
+  const draftStatusText =
+    draftSaveStatus === 'saving'
+      ? 'Guardando borrador...'
+      : draftSaveStatus === 'saved'
+        ? 'Borrador guardado'
+        : draftSaveStatus === 'savedAll'
+          ? 'Cambios guardados'
+          : '';
 
   useEffect(() => {
-    setDraft(cleanConfig(initialConfig));
+    const nextConfig = cleanConfig(initialConfig);
+    const nextDraftPageId = bioPageId ?? nextConfig.bioPageId ?? routeBioId ?? (location.pathname.includes('/dashboard/bio/create') ? 'new' : nextConfig.username || 'new');
+    const savedTime = savedConfigTime(nextConfig);
+    const candidate = routeForcesEditor ? loadBioDraft(draftUserId, nextDraftPageId) : null;
+    const candidateTime = candidate ? new Date(candidate.updatedAt).getTime() : 0;
+    const initialRecord = buildBioDraftRecord({
+      userId: draftUserId,
+      bioPageId: nextDraftPageId,
+      config: nextConfig,
+      editorState: { mode: routeForcesEditor ? 'editor' : hasRealBioPage(initialConfig) ? 'list' : 'editor' },
+    });
+
+    setDraft(nextConfig);
     setPendingAvatarFile(null);
     setPendingBackgroundFile(null);
     setPendingBannerFile(null);
     setPendingBannerFiles({});
     setBannerPanelOpen(false);
     setMode(routeForcesEditor ? 'editor' : hasRealBioPage(initialConfig) ? 'list' : 'editor');
-  }, [initialConfig, routeForcesEditor]);
+    setRestoreCandidate(candidate && candidateTime > savedTime ? candidate : null);
+    setDraftSaveStatus('idle');
+    setHasUnsavedChanges(false);
+    latestDraftRecordRef.current = initialRecord;
+    lastAutosaveHashRef.current = hashBioDraftRecord(initialRecord);
+  }, [bioPageId, draftUserId, initialConfig, location.pathname, routeBioId, routeForcesEditor]);
 
   function patchDraft(patch: Partial<BioPageConfig>) {
     setDraft((prev) => ({ ...prev, ...patch }));
+  }
+
+  const buildCurrentDraftRecord = useCallback(() => buildBioDraftRecord({
+    userId: draftUserId,
+    bioPageId: draftStoragePageId,
+    config: cleanConfig(draft),
+    editorState: {
+      mode,
+      bannerPanelOpen,
+      bannerDraft,
+      bannerLinkEnabled,
+      bannerLinkSource,
+      imageWarning: hasLocalDraftImages
+        ? 'Esta imagen se guardará al presionar Guardar. No cierres la pestaña antes de guardar.'
+        : undefined,
+    },
+  }), [
+    bannerDraft,
+    bannerLinkEnabled,
+    bannerLinkSource,
+    bannerPanelOpen,
+    draft,
+    draftStoragePageId,
+    draftUserId,
+    hasLocalDraftImages,
+    mode,
+  ]);
+
+  const persistCurrentDraft = useCallback((showStatus = true) => {
+    if (!routeForcesEditor || mode !== 'editor') return;
+    const record = buildCurrentDraftRecord();
+    saveBioDraft(draftUserId, draftStoragePageId, record);
+    latestDraftRecordRef.current = record;
+    lastAutosaveHashRef.current = hashBioDraftRecord(record);
+    setHasUnsavedChanges(true);
+    if (showStatus) {
+      setDraftSaveStatus('saved');
+    }
+  }, [buildCurrentDraftRecord, draftStoragePageId, draftUserId, mode, routeForcesEditor]);
+
+  useEffect(() => {
+    if (!routeForcesEditor || mode !== 'editor') return undefined;
+
+    const record = buildCurrentDraftRecord();
+    latestDraftRecordRef.current = record;
+    const nextHash = hashBioDraftRecord(record);
+    if (nextHash === lastAutosaveHashRef.current) return undefined;
+
+    setDraftSaveStatus('saving');
+    setHasUnsavedChanges(true);
+    if (autosaveTimerRef.current) {
+      window.clearTimeout(autosaveTimerRef.current);
+    }
+    autosaveTimerRef.current = window.setTimeout(() => {
+      saveBioDraft(draftUserId, draftStoragePageId, record);
+      latestDraftRecordRef.current = record;
+      lastAutosaveHashRef.current = nextHash;
+      setDraftSaveStatus('saved');
+    }, 700);
+
+    return () => {
+      if (autosaveTimerRef.current) {
+        window.clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, [buildCurrentDraftRecord, draftStoragePageId, draftUserId, mode, routeForcesEditor]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') persistCurrentDraft(false);
+    };
+    const handlePageHide = () => persistCurrentDraft(false);
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedChanges) return;
+      persistCurrentDraft(false);
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [hasUnsavedChanges, persistCurrentDraft]);
+
+  function restoreBioDraft(record: BioDraftRecord) {
+    const config = cleanConfig(record.fullConfig);
+    setDraft(config);
+    setMode('editor');
+    setBannerPanelOpen(Boolean(record.editorState?.bannerPanelOpen));
+    setBannerDraft(record.editorState?.bannerDraft ?? newBanner());
+    setBannerLinkEnabled(Boolean(record.editorState?.bannerLinkEnabled));
+    setBannerLinkSource(record.editorState?.bannerLinkSource ?? 'new');
+    setPendingAvatarFile(null);
+    setPendingBackgroundFile(null);
+    setPendingBannerFile(null);
+    setPendingBannerFiles({});
+    setRestoreCandidate(null);
+    latestDraftRecordRef.current = record;
+    lastAutosaveHashRef.current = hashBioDraftRecord(record);
+    setHasUnsavedChanges(true);
+    setDraftSaveStatus('saved');
+    showNotice('Borrador restaurado.');
+  }
+
+  function discardBioDraft(record: BioDraftRecord) {
+    clearBioDraft(record.userId, record.bioPageId ?? draftStoragePageId);
+    setRestoreCandidate(null);
+    setHasUnsavedChanges(false);
+    setDraftSaveStatus('idle');
+    showNotice('Borrador descartado.');
   }
 
   function showNotice(message: string) {
@@ -347,6 +536,7 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
       const previewUrl = await readFilePreview(file);
       setPendingAvatarFile(file);
       patchDraft({ avatarUrl: previewUrl, avatarPath: undefined });
+      showNotice('Esta imagen se guardará al presionar Guardar. No cierres la pestaña antes de guardar.');
     } catch {
       showError('No se pudo cargar la vista previa.');
     }
@@ -373,6 +563,7 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
       const previewUrl = await readFilePreview(file);
       setPendingBackgroundFile(file);
       patchDraft({ backgroundImageUrl: previewUrl, backgroundImagePath: undefined });
+      showNotice('Esta imagen se guardará al presionar Guardar. No cierres la pestaña antes de guardar.');
     } catch {
       showError('No se pudo cargar la vista previa.');
     }
@@ -395,6 +586,7 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
       const previewUrl = await readFilePreview(file);
       setPendingBannerFile(file);
       setBannerDraft((prev) => ({ ...prev, imageUrl: previewUrl, imagePath: undefined }));
+      showNotice('Esta imagen se guardará al presionar Guardar. No cierres la pestaña antes de guardar.');
     } catch {
       showError('No se pudo cargar la vista previa.');
     }
@@ -416,6 +608,11 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
     setBannerLinkEnabled(Boolean(banner.destinationUrl));
     setBannerLinkSource('new');
     setBannerPanelOpen(true);
+  }
+
+  function cancelBannerDraft() {
+    setPendingBannerFile(null);
+    setBannerPanelOpen(false);
   }
 
   function saveBannerDraft() {
@@ -608,8 +805,9 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
       : pendingBannerFiles;
     setUploading('assets');
     try {
-      if (pendingAvatarFile) {
-        const uploaded = await uploadBioAvatar(pendingAvatarFile);
+      const avatarFile = pendingAvatarFile ?? (isDataUrl(nextConfig.avatarUrl) ? await dataUrlToFile(nextConfig.avatarUrl, 'avatar-draft') : null);
+      if (avatarFile) {
+        const uploaded = await uploadBioAvatar(avatarFile);
         if (!uploaded) {
           showError('No se pudo subir la imagen. Revisa Supabase Storage.');
           return null;
@@ -617,8 +815,9 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
         nextConfig = { ...nextConfig, avatarUrl: uploaded.url, avatarPath: uploaded.path };
       }
 
-      if (pendingBackgroundFile && canUseAdvanced) {
-        const uploaded = await uploadBioBackgroundImage(pendingBackgroundFile);
+      const backgroundFile = pendingBackgroundFile ?? (isDataUrl(nextConfig.backgroundImageUrl) ? await dataUrlToFile(nextConfig.backgroundImageUrl, 'background-draft') : null);
+      if (backgroundFile && canUseAdvanced) {
+        const uploaded = await uploadBioBackgroundImage(backgroundFile);
         if (!uploaded) {
           showError('No se pudo subir la imagen. Revisa Supabase Storage.');
           return null;
@@ -632,7 +831,7 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
 
       const banners: BioBanner[] = [];
       for (const banner of nextConfig.banners) {
-        const file = pendingFiles[banner.id];
+        const file = pendingFiles[banner.id] ?? (isDataUrl(banner.imageUrl) ? await dataUrlToFile(banner.imageUrl, `banner-${banner.id}`) : null);
         if (!file) {
           banners.push(banner);
           continue;
@@ -669,6 +868,9 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
     setPendingBackgroundFile(null);
     setPendingBannerFile(null);
     setPendingBannerFiles({});
+    clearBioDraft(draftUserId, draftStoragePageId);
+    setHasUnsavedChanges(false);
+    setDraftSaveStatus('savedAll');
     setMode('list');
     navigate('/dashboard/bio');
     showNotice('Página guardada correctamente.');
@@ -676,7 +878,7 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
 
   async function copyPublicUrl() {
     await navigator.clipboard?.writeText(publicUrl);
-    showNotice('Link copiado al portapapeles.');
+    showNotice('Link copiado correctamente.');
   }
 
   async function saveQr() {
@@ -868,6 +1070,29 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
 
   return (
     <div className="space-y-6">
+      {restoreCandidate && (
+        <div className="rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-amber-100">Encontramos cambios no guardados. ¿Quieres restaurarlos?</p>
+            <p className="text-xs text-amber-100/70">Último borrador: {formatDate(restoreCandidate.updatedAt)}. No sobrescribiremos tu página guardada sin confirmación.</p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <button type="button" onClick={() => restoreBioDraft(restoreCandidate)} className="rounded-xl bg-amber-300 px-4 py-2 text-sm font-semibold text-black">
+              Restaurar borrador
+            </button>
+            <button type="button" onClick={() => discardBioDraft(restoreCandidate)} className="rounded-xl border border-amber-200/30 px-4 py-2 text-sm font-semibold text-amber-100">
+              Descartar borrador
+            </button>
+          </div>
+        </div>
+      )}
+      {(draftStatusText || hasLocalDraftImages || customDomainWarning) && (
+        <div className="rounded-2xl border border-white/10 bg-[#050816] p-3 text-xs text-[var(--text-secondary)] flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+          {draftStatusText && <span className="text-brand-cyan">{draftStatusText}</span>}
+          {hasLocalDraftImages && <span>Esta imagen se guardará al presionar Guardar. No cierres la pestaña antes de guardar.</span>}
+          {customDomainWarning && <span className="text-amber-200">{customDomainWarning}</span>}
+        </div>
+      )}
       <div className="flex flex-col xl:flex-row xl:items-start gap-6">
         <div className="min-w-0 flex-1 space-y-6">
           <div className="rounded-2xl border border-white/10 bg-[#050816] p-5">
@@ -1088,7 +1313,7 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
               <div className="rounded-2xl border border-brand-cyan/30 bg-black/45 p-4 space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-base font-semibold text-white">Editor de banner</h3>
-                  <button type="button" onClick={() => setBannerPanelOpen(false)} className="text-sm text-[var(--text-secondary)]">Cancelar</button>
+                  <button type="button" onClick={cancelBannerDraft} className="text-sm text-[var(--text-secondary)]">Cancelar</button>
                 </div>
 
                 <div className="grid lg:grid-cols-[220px_1fr] gap-4">
@@ -1154,7 +1379,7 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
                     )}
                     <div className="flex items-center gap-2 pt-2">
                       <button type="button" onClick={saveBannerDraft} className="btn-brand px-5 py-2.5 rounded-xl text-sm">Listo</button>
-                      <button type="button" onClick={() => setBannerPanelOpen(false)} className="px-5 py-2.5 rounded-xl border border-white/10 text-sm text-white">Cancelar</button>
+                      <button type="button" onClick={cancelBannerDraft} className="px-5 py-2.5 rounded-xl border border-white/10 text-sm text-white">Cancelar</button>
                     </div>
                   </div>
                 </div>
