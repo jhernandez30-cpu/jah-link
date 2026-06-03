@@ -864,10 +864,10 @@ function assertValidBioImage(file: File): void {
   const typeOk = BIO_ASSET_TYPES.includes(file.type);
   const extOk = BIO_ASSET_EXTENSIONS.includes(ext);
   if (!typeOk && !extOk) {
-    throw new StorageError('validation', 'Formato no válido. Usa PNG, JPG, JPEG o WebP.');
+    throw new StorageError('validation', 'Formato no permitido. Usa PNG, JPG o WEBP.');
   }
   if (file.size > BIO_ASSET_MAX_BYTES) {
-    throw new StorageError('validation', 'La imagen debe pesar 5 MB o menos.');
+    throw new StorageError('validation', 'El archivo supera el tamaño permitido.');
   }
 }
 
@@ -894,6 +894,9 @@ function safeAssetName(file: File): string {
 }
 
 async function uploadBioAsset(file: File, userId: string | undefined, folder: 'avatars' | 'banners' | 'backgrounds'): Promise<UploadedBioAsset> {
+  if (!file) {
+    throw new StorageError('validation', 'No se pudo subir la imagen. Revisa Supabase Storage.');
+  }
   assertValidBioImage(file);
 
   const sb = getSupabase();
@@ -918,7 +921,7 @@ async function uploadBioAsset(file: File, userId: string | undefined, folder: 'a
   });
 
   if (error) {
-    throw new StorageError('storage', 'No se pudo subir la imagen. Verifica el bucket público "bio-assets" en Supabase.');
+    throw new StorageError('storage', 'No se pudo subir la imagen. Revisa Supabase Storage y confirma que el bucket público "bio-assets" exista.');
   }
 
   const { data } = sb.storage.from(BIO_ASSET_BUCKET).getPublicUrl(path);

@@ -985,6 +985,9 @@ create policy "Users can read their own subscriptions"
   using (auth.uid() = user_id);
 
 -- Storage setup for Bio images.
+-- If Supabase rejects the bucket statement because of permissions:
+-- Storage -> New bucket -> name: bio-assets -> Public bucket enabled,
+-- then run this section again so the policies are applied.
 insert into storage.buckets (id, name, public)
 values ('bio-assets', 'bio-assets', true)
 on conflict (id) do update set public = true;

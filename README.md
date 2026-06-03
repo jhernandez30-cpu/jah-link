@@ -114,7 +114,7 @@ vercel env pull .env.local
 
 En Vite puedes usar `.env.local` para desarrollo local. No subas `.env` ni `.env.local` al repositorio.
 
-## Página Bio
+## Página Bio y Supabase Storage
 
 La Página Bio se administra desde `/dashboard/bio` y publica el perfil en:
 
@@ -142,6 +142,14 @@ Flujo:
 4. Sube imágenes desde celular o computadora; el bucket usado es `bio-assets`.
 5. Guarda la página.
 6. El panel vuelve al listado **JAH Link Pages** y muestra tarjeta, link público, visitas, interacciones y acciones.
+
+Storage requerido:
+
+1. En Supabase, abre **Storage**.
+2. Crea el bucket `bio-assets`.
+3. Activa **Public bucket** para que avatar, banners y fondos puedan verse en `/m/:username`.
+4. Ejecuta `supabase/schema.sql` completo en **SQL Editor** para aplicar tablas, RLS, políticas del bucket e índices.
+5. Prueba una Página Bio desde `/dashboard/bio/create`: subir avatar, guardar 1 o 2 banners, abrir `/m/:username` y confirmar que los clics abren la URL de destino.
 
 Tablas usadas:
 
@@ -253,8 +261,9 @@ Si las tablas `payments` o `subscriptions` todavía no existen, ejecuta `supabas
 1. Abrir el proyecto de Supabase conectado a JAH Link.
 2. Ir a **SQL Editor**.
 3. Ejecutar el archivo completo `supabase/schema.sql`.
-4. Ir a Vercel → **Project Settings** → **Environment Variables**.
-5. Agregar estas variables:
+4. Confirmar en **Storage** que existe el bucket público `bio-assets`. Si no existe, crearlo como **Public bucket** y volver a ejecutar la sección de políticas de `supabase/schema.sql`.
+5. Ir a Vercel → **Project Settings** → **Environment Variables**.
+6. Agregar estas variables:
    ```env
    VITE_SUPABASE_URL=your_supabase_project_url
    VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
@@ -268,21 +277,21 @@ Si las tablas `payments` o `subscriptions` todavía no existen, ejecuta `supabas
    SUPABASE_URL=your_supabase_project_url
    SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
    ```
-6. Confirmar configuración de Vercel:
+7. Confirmar configuración de Vercel:
    - Build command: `npm run build`
    - Output directory: `dist`
-7. Configurar webhook en PayPal Developer Dashboard:
+8. Configurar webhook en PayPal Developer Dashboard:
    - URL: `https://jah.link/api/paypal/webhook`
    - Eventos: Checkout order approved, Payment capture completed, Payment capture denied, Payment capture refunded, Payment capture reversed
    - Copiar el Webhook ID a `PAYPAL_WEBHOOK_ID`.
-8. Hacer **Redeploy** en Vercel.
-9. Verificar en producción:
+9. Hacer **Redeploy** en Vercel.
+10. Verificar en producción:
    - Registro
    - Login
    - Perfil de usuario
    - Pago sandbox Pro y Business
    - Enlaces cortos y redirección por slug
-   - Página bio pública
+   - Página Bio pública, avatar, banners, redes y clics de destino
    - Códigos QR
    - Analítica de clics, visitas y escaneos
 

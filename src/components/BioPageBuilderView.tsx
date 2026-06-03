@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowUp,
@@ -213,7 +214,33 @@ function newBanner(): BioBanner {
   };
 }
 
+const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp'];
+
+function validateImageFile(file: File): string | null {
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+  if (!IMAGE_TYPES.includes(file.type) && !IMAGE_EXTENSIONS.includes(ext)) {
+    return 'Formato no permitido. Usa PNG, JPG o WEBP.';
+  }
+  if (file.size > IMAGE_MAX_BYTES) {
+    return 'El archivo supera el tamaño permitido.';
+  }
+  return null;
+}
+
+function readFilePreview(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('No se pudo cargar la vista previa.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioPageBuilderViewProps) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const {
     user,
     links,
@@ -242,6 +269,10 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
   const [bannerDraft, setBannerDraft] = useState<BioBanner>(() => newBanner());
   const [bannerLinkEnabled, setBannerLinkEnabled] = useState(false);
   const [bannerLinkSource, setBannerLinkSource] = useState<BannerLinkSource>('new');
+  const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
+  const [pendingBackgroundFile, setPendingBackgroundFile] = useState<File | null>(null);
+  const [pendingBannerFile, setPendingBannerFile] = useState<File | null>(null);
+  const [pendingBannerFiles, setPendingBannerFiles] = useState<Record<string, File>>({});
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const bannerInputRef = useRef<HTMLInputElement>(null);
@@ -257,7 +288,24 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
   const publicUrl = draft.username ? getPublicBioUrl(draft.username) : `${PUBLIC_BASE_URL}/m/usuario`;
   const remainingPages = planDef.limits.bioPages === null ? null : Math.max(0, planDef.limits.bioPages - (hasPage ? 1 : 0));
   const filteredPageVisible = !query.trim() || publicUrl.toLowerCase().includes(query.toLowerCase()) || draft.displayName.toLowerCase().includes(query.toLowerCase());
-  const activeBanners = draft.banners.filter((banner) => banner.active !== false);
+  const routeForcesEditor = location.pathname.includes('/dashboard/bio/create') || location.pathname.includes('/dashboard/bio/edit/');
+  const previewBanners = useMemo(() => {
+    if (!bannerPanelOpen) return draft.banners;
+    const hasDraftContent = Boolean(
+      bannerDraft.title.trim() ||
+        bannerDraft.description?.trim() ||
+        bannerDraft.imageUrl ||
+        bannerDraft.destinationUrl,
+    );
+    if (!hasDraftContent) return draft.banners;
+
+    const exists = draft.banners.some((banner) => banner.id === bannerDraft.id);
+    const next = exists
+      ? draft.banners.map((banner) => (banner.id === bannerDraft.id ? bannerDraft : banner))
+      : [...draft.banners, bannerDraft];
+    return next.map((banner, position) => ({ ...banner, position }));
+  }, [bannerDraft, bannerPanelOpen, draft.banners]);
+  const activeBanners = previewBanners.filter((banner) => banner.active !== false);
   const activeSocials = draft.socialLinks.filter((social) => social.active !== false && social.url);
   const activeLinks = draft.links.filter((link) => link.active !== false);
   const interactions =
@@ -266,8 +314,13 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
 
   useEffect(() => {
     setDraft(cleanConfig(initialConfig));
-    setMode(hasRealBioPage(initialConfig) ? 'list' : 'editor');
-  }, [initialConfig]);
+    setPendingAvatarFile(null);
+    setPendingBackgroundFile(null);
+    setPendingBannerFile(null);
+    setPendingBannerFiles({});
+    setBannerPanelOpen(false);
+    setMode(routeForcesEditor ? 'editor' : hasRealBioPage(initialConfig) ? 'list' : 'editor');
+  }, [initialConfig, routeForcesEditor]);
 
   function patchDraft(patch: Partial<BioPageConfig>) {
     setDraft((prev) => ({ ...prev, ...patch }));
@@ -285,15 +338,23 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
 
   async function handleAvatarFile(file?: File) {
     if (!file) return;
-    setUploading('avatar');
-    const uploaded = await uploadBioAvatar(file);
-    setUploading(null);
-    if (!uploaded) return;
-    patchDraft({ avatarUrl: uploaded.url, avatarPath: uploaded.path });
+    const validationError = validateImageFile(file);
+    if (validationError) {
+      showError(validationError);
+      return;
+    }
+    try {
+      const previewUrl = await readFilePreview(file);
+      setPendingAvatarFile(file);
+      patchDraft({ avatarUrl: previewUrl, avatarPath: undefined });
+    } catch {
+      showError('No se pudo cargar la vista previa.');
+    }
   }
 
   async function removeAvatar() {
     if (draft.avatarPath) await deleteBioAsset(draft.avatarPath);
+    setPendingAvatarFile(null);
     patchDraft({ avatarUrl: '', avatarPath: undefined });
   }
 
@@ -303,30 +364,45 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
       showError('La imagen de fondo personalizada está disponible en Pro y Business.');
       return;
     }
-    setUploading('background');
-    const uploaded = await uploadBioBackgroundImage(file);
-    setUploading(null);
-    if (!uploaded) return;
-    patchDraft({ backgroundImageUrl: uploaded.url, backgroundImagePath: uploaded.path });
+    const validationError = validateImageFile(file);
+    if (validationError) {
+      showError(validationError);
+      return;
+    }
+    try {
+      const previewUrl = await readFilePreview(file);
+      setPendingBackgroundFile(file);
+      patchDraft({ backgroundImageUrl: previewUrl, backgroundImagePath: undefined });
+    } catch {
+      showError('No se pudo cargar la vista previa.');
+    }
   }
 
   async function removeBackground() {
     if (draft.backgroundImagePath) await deleteBioAsset(draft.backgroundImagePath);
+    setPendingBackgroundFile(null);
     patchDraft({ backgroundImageUrl: '', backgroundImagePath: undefined });
   }
 
   async function handleBannerFile(file?: File) {
     if (!file) return;
-    setUploading('banner');
-    const uploaded = await uploadBioBannerImage(file);
-    setUploading(null);
-    if (!uploaded) return;
-    setBannerDraft((prev) => ({ ...prev, imageUrl: uploaded.url, imagePath: uploaded.path }));
+    const validationError = validateImageFile(file);
+    if (validationError) {
+      showError(validationError);
+      return;
+    }
+    try {
+      const previewUrl = await readFilePreview(file);
+      setPendingBannerFile(file);
+      setBannerDraft((prev) => ({ ...prev, imageUrl: previewUrl, imagePath: undefined }));
+    } catch {
+      showError('No se pudo cargar la vista previa.');
+    }
   }
 
   function openNewBannerPanel() {
     if (draft.banners.length >= bannerLimit) {
-      showError('Has alcanzado el límite del plan Gratis. Actualiza a Pro para continuar.');
+      showError('Has alcanzado el límite de 2 banners del plan Gratis. Actualiza a Pro para continuar.');
       return;
     }
     setBannerDraft({ ...newBanner(), position: draft.banners.length });
@@ -368,6 +444,9 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
       active: bannerDraft.active !== false,
     };
 
+    if (pendingBannerFile) {
+      setPendingBannerFiles((prev) => ({ ...prev, [nextBanner.id]: pendingBannerFile }));
+    }
     setDraft((prev) => {
       const exists = prev.banners.some((banner) => banner.id === nextBanner.id);
       const banners = exists
@@ -378,11 +457,17 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
         banners: banners.map((banner, position) => ({ ...banner, position })),
       };
     });
+    setPendingBannerFile(null);
     setBannerPanelOpen(false);
-    showNotice('Banner guardado en la página.');
+    showNotice('Banner guardado correctamente.');
   }
 
   function removeBanner(id: string) {
+    setPendingBannerFiles((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     setDraft((prev) => ({
       ...prev,
       banners: prev.banners
@@ -474,8 +559,8 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
       showError('El username debe usar solo letras, números, guion o guion bajo, y no puede ser reservado.');
       return null;
     }
-    if (draft.banners.length > bannerLimit) {
-      showError('Has alcanzado el límite del plan Gratis. Actualiza a Pro para continuar.');
+    if (previewBanners.length > bannerLimit) {
+      showError('Has alcanzado el límite de 2 banners del plan Gratis. Actualiza a Pro para continuar.');
       return null;
     }
 
@@ -492,7 +577,7 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
       return null;
     }
 
-    const normalizedBanners = draft.banners.map((banner, position) => {
+    const normalizedBanners = previewBanners.map((banner, position) => {
       const destinationUrl = banner.destinationUrl ? normalizeUrl(banner.destinationUrl) : '';
       return { ...banner, destinationUrl, position, active: banner.active !== false };
     });
@@ -516,16 +601,76 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
     };
   }
 
+  async function uploadPendingAssets(config: BioPageConfig): Promise<BioPageConfig | null> {
+    let nextConfig: BioPageConfig = { ...config };
+    const pendingFiles = pendingBannerFile && bannerPanelOpen
+      ? { ...pendingBannerFiles, [bannerDraft.id]: pendingBannerFile }
+      : pendingBannerFiles;
+    setUploading('assets');
+    try {
+      if (pendingAvatarFile) {
+        const uploaded = await uploadBioAvatar(pendingAvatarFile);
+        if (!uploaded) {
+          showError('No se pudo subir la imagen. Revisa Supabase Storage.');
+          return null;
+        }
+        nextConfig = { ...nextConfig, avatarUrl: uploaded.url, avatarPath: uploaded.path };
+      }
+
+      if (pendingBackgroundFile && canUseAdvanced) {
+        const uploaded = await uploadBioBackgroundImage(pendingBackgroundFile);
+        if (!uploaded) {
+          showError('No se pudo subir la imagen. Revisa Supabase Storage.');
+          return null;
+        }
+        nextConfig = {
+          ...nextConfig,
+          backgroundImageUrl: uploaded.url,
+          backgroundImagePath: uploaded.path,
+        };
+      }
+
+      const banners: BioBanner[] = [];
+      for (const banner of nextConfig.banners) {
+        const file = pendingFiles[banner.id];
+        if (!file) {
+          banners.push(banner);
+          continue;
+        }
+        const uploaded = await uploadBioBannerImage(file);
+        if (!uploaded) {
+          showError('No se pudo subir la imagen. Revisa Supabase Storage.');
+          return null;
+        }
+        banners.push({ ...banner, imageUrl: uploaded.url, imagePath: uploaded.path });
+      }
+      nextConfig = { ...nextConfig, banners };
+      return nextConfig;
+    } finally {
+      setUploading(null);
+    }
+  }
+
   async function savePage() {
     clearMessages();
     const validConfig = validateBeforeSave();
     if (!validConfig) return;
     setSaving(true);
-    const result = await Promise.resolve(onSaveConfig(validConfig));
+    const configWithUploadedAssets = await uploadPendingAssets(validConfig);
+    if (!configWithUploadedAssets) {
+      setSaving(false);
+      return;
+    }
+    const result = await Promise.resolve(onSaveConfig(configWithUploadedAssets));
     setSaving(false);
     if (result === false) return;
-    setDraft(cleanConfig(validConfig));
+    setDraft(cleanConfig(configWithUploadedAssets));
+    setPendingAvatarFile(null);
+    setPendingBackgroundFile(null);
+    setPendingBannerFile(null);
+    setPendingBannerFiles({});
     setMode('list');
+    navigate('/dashboard/bio');
     showNotice('Página guardada correctamente.');
   }
 
@@ -598,7 +743,14 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
         </div>
 
         <div className="flex lg:flex-col flex-wrap gap-2 lg:w-40">
-          <button type="button" onClick={() => setMode('editor')} className="px-3 py-2 rounded-xl bg-white text-black text-xs font-semibold flex items-center gap-2 justify-center">
+          <button
+            type="button"
+            onClick={() => {
+              navigate(`/dashboard/bio/edit/${(bioPageId ?? draft.username) || 'local'}`);
+              setMode('editor');
+            }}
+            className="px-3 py-2 rounded-xl bg-white text-black text-xs font-semibold flex items-center gap-2 justify-center"
+          >
             <Edit3 className="h-4 w-4" /> Editar
           </button>
           <a href={publicUrl} target="_blank" rel="noopener noreferrer" className="px-3 py-2 rounded-xl border border-brand-cyan/40 text-brand-cyan text-xs font-semibold flex items-center gap-2 justify-center">
@@ -639,9 +791,10 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
             type="button"
             onClick={() => {
               if (hasPage && remainingPages === 0) {
-                showError('Has alcanzado el límite del plan Gratis. Actualiza a Pro para continuar.');
+                showError('Ya tienes la Página Bio incluida en el plan Gratis. Edita la página existente o actualiza a Pro.');
                 return;
               }
+              navigate('/dashboard/bio/create');
               setMode('editor');
             }}
             className="btn-brand px-5 py-3 rounded-xl text-sm inline-flex items-center justify-center gap-2"
@@ -675,7 +828,14 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
             <BrandLogo size="md" className="mx-auto mb-4" />
             <h2 className="text-lg font-semibold text-white">Todavía no tienes una Página Bio publicada</h2>
             <p className="mt-2 text-sm text-[var(--text-secondary)]">Crea tu página, sube imágenes, agrega redes y comparte un link público en `/m/usuario`.</p>
-            <button type="button" onClick={() => setMode('editor')} className="btn-brand mt-5 px-5 py-3 rounded-xl text-sm inline-flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                navigate('/dashboard/bio/create');
+                setMode('editor');
+              }}
+              className="btn-brand mt-5 px-5 py-3 rounded-xl text-sm inline-flex items-center gap-2"
+            >
               <Plus className="h-4 w-4" /> Crear página
             </button>
           </div>
@@ -716,7 +876,14 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
                 <h1 className="text-2xl font-bold text-white">Configura cómo quieres compartir la página</h1>
                 <p className="mt-1 text-sm text-[var(--text-secondary)]">Configura tu link y código QR para obtener visitas a la página.</p>
               </div>
-              <button type="button" onClick={() => setMode('list')} className="px-4 py-2 rounded-xl border border-white/10 text-sm text-white">
+              <button
+                type="button"
+                onClick={() => {
+                  navigate('/dashboard/bio');
+                  setMode('list');
+                }}
+                className="px-4 py-2 rounded-xl border border-white/10 text-sm text-white"
+              >
                 Volver al listado
               </button>
             </div>
@@ -785,7 +952,7 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
                   <InitialsAvatar name={draft.displayName} email={draft.email} imageUrl={draft.avatarUrl} size="xl" />
                   <input ref={avatarInputRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp" hidden onChange={(event) => void handleAvatarFile(event.target.files?.[0])} />
                   <button type="button" onClick={() => avatarInputRef.current?.click()} className="w-full rounded-xl bg-white text-black py-2 text-xs font-semibold flex items-center justify-center gap-2">
-                    <Upload className="h-4 w-4" /> {uploading === 'avatar' ? 'Subiendo...' : 'Editar imagen'}
+                    <Upload className="h-4 w-4" /> {uploading === 'assets' ? 'Subiendo...' : 'Editar imagen'}
                   </button>
                   <button type="button" onClick={() => void removeAvatar()} className="w-full rounded-xl border border-white/10 text-white py-2 text-xs font-semibold flex items-center justify-center gap-2">
                     <Trash2 className="h-4 w-4" /> Eliminar
@@ -931,8 +1098,22 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
                     </div>
                     <input ref={bannerInputRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp" hidden onChange={(event) => void handleBannerFile(event.target.files?.[0])} />
                     <div className="grid grid-cols-2 gap-2">
-                      <button type="button" onClick={() => bannerInputRef.current?.click()} className="rounded-xl bg-white text-black py-2 text-xs font-semibold">{uploading === 'banner' ? 'Subiendo...' : 'Editar imagen'}</button>
-                      <button type="button" onClick={() => setBannerDraft((prev) => ({ ...prev, imageUrl: '', imagePath: undefined }))} className="rounded-xl border border-white/10 text-white py-2 text-xs font-semibold">Eliminar</button>
+                      <button type="button" onClick={() => bannerInputRef.current?.click()} className="rounded-xl bg-white text-black py-2 text-xs font-semibold">{uploading === 'assets' ? 'Subiendo...' : 'Editar imagen'}</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPendingBannerFile(null);
+                          setPendingBannerFiles((prev) => {
+                            const next = { ...prev };
+                            delete next[bannerDraft.id];
+                            return next;
+                          });
+                          setBannerDraft((prev) => ({ ...prev, imageUrl: '', imagePath: undefined }));
+                        }}
+                        className="rounded-xl border border-white/10 text-white py-2 text-xs font-semibold"
+                      >
+                        Eliminar
+                      </button>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       {ASPECT_OPTIONS.map((option) => (
@@ -1010,7 +1191,7 @@ export default function BioPageBuilderView({ initialConfig, onSaveConfig }: BioP
                 </div>
                 <input ref={backgroundInputRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp" hidden onChange={(event) => void handleBackgroundFile(event.target.files?.[0])} />
                 <button type="button" onClick={() => backgroundInputRef.current?.click()} disabled={isFree} className="rounded-xl border border-white/10 px-4 py-2 text-sm text-white disabled:opacity-40">
-                  {uploading === 'background' ? 'Subiendo...' : 'Editar imagen'}
+                  {uploading === 'assets' ? 'Subiendo...' : 'Editar imagen'}
                 </button>
               </div>
               {draft.backgroundImageUrl && (

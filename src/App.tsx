@@ -88,6 +88,8 @@ function AppRoutes() {
         <Route index element={<DashboardHome />} />
         <Route path="links" element={<LinksPage />} />
         <Route path="bio" element={<BioPage />} />
+        <Route path="bio/create" element={<BioPage />} />
+        <Route path="bio/edit/:id" element={<BioPage />} />
         <Route path="analytics" element={<AnalyticsPage />} />
         <Route path="qr" element={<QRPage />} />
         <Route path="settings" element={<SettingsView />} />

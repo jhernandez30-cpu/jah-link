@@ -48,8 +48,6 @@ export default function DashboardLayout() {
 
   return (
     <div className="min-h-screen bg-black text-white font-sans flex flex-col md:flex-row overflow-x-hidden">
-      <div className="absolute top-[20%] right-[-10%] w-[35%] h-[35%] rounded-full bg-brand-cyan/5 blur-[120px] pointer-events-none z-0" />
-
       <div className="md:hidden flex items-center justify-between px-4 py-4 bg-[var(--surface)] border-b border-[var(--border)] z-40 w-full shrink-0">
         <BrandLogo variant="full" size="md" />
         <button
@@ -62,11 +60,11 @@ export default function DashboardLayout() {
       </div>
 
       <aside
-        className={`fixed md:sticky top-0 left-0 h-full w-[260px] bg-[var(--surface)] border-r border-[var(--border)] p-6 flex flex-col justify-between shrink-0 transform transition-transform duration-300 z-40 ${
+        className={`fixed md:sticky top-0 left-0 h-screen w-[260px] bg-[var(--surface)] border-r border-[var(--border)] p-6 flex flex-col justify-between shrink-0 overflow-y-auto transform transition-transform duration-300 z-40 ${
           sidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full md:translate-x-0'
         }`}
       >
-        <div className="space-y-8">
+        <div className="space-y-8 min-h-0">
           <div className="flex items-center justify-between border-b border-[var(--border)] pb-5">
             <BrandLogo variant="full" size="lg" />
             <button type="button" className="md:hidden text-slate-500" onClick={() => setSidebarOpen(false)}>
@@ -117,8 +115,8 @@ export default function DashboardLayout() {
         </div>
       </aside>
 
-      <main className="flex-1 min-w-0 flex flex-col z-10 bg-black">
-        <header className="h-20 bg-[var(--surface)]/80 border-b border-[var(--border)] px-6 flex items-center justify-between shrink-0">
+      <main className="flex-1 min-w-0 min-h-screen flex flex-col z-10 bg-black">
+        <header className="sticky top-0 z-30 h-20 bg-[var(--surface)]/80 backdrop-blur border-b border-[var(--border)] px-4 sm:px-6 flex items-center justify-between shrink-0">
           <div className="relative w-full max-w-md hidden sm:block">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--text-secondary)]" />
             <input
@@ -181,7 +179,7 @@ export default function DashboardLayout() {
           </div>
         </header>
 
-        <div className="flex-1 p-6 md:p-8 overflow-y-auto max-w-7xl w-full mx-auto space-y-4">
+        <div className="flex-1 p-4 sm:p-6 md:p-8 overflow-y-auto w-full max-w-[1440px] mx-auto space-y-4">
           {showDemoBanner && (
             <p className="text-xs text-amber-400/90 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2">
               {DEMO_MODE_MESSAGE}
